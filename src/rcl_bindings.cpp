@@ -41,14 +41,14 @@ void CreateNode(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     return;
   }
 
-  const char* nodeName = *Nan::Utf8String(info[0]->ToString());
-  const char* nameSpace = *Nan::Utf8String(info[1]->ToString());
+  const char* node_name = *Nan::Utf8String(info[0]->ToString());
+  const char* name_space = *Nan::Utf8String(info[1]->ToString());
 
   rcl_node_t* node = reinterpret_cast<rcl_node_t*>(malloc(sizeof(rcl_node_t)));
 
   *node = rcl_get_zero_initialized_node();
   rcl_node_options_t options = rcl_node_get_default_options();
-  if (rcl_node_init(node, nodeName, nameSpace, &options) != RCL_RET_OK) {
+  if (rcl_node_init(node, node_name, name_space, &options) != RCL_RET_OK) {
     Nan::ThrowError(rcl_get_error_string_safe());
     return;
   }

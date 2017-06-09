@@ -27,7 +27,7 @@ function inherits(target, source) {
 
 inherits(rclnodejs.ShadowNode, Node);
 
-let Rclnodejs  = {
+let Rclnodejs = {
   _nodes: [],
 
   createNode(nodeName, namespace = '') {

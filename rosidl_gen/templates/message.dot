@@ -62,7 +62,7 @@ class {{=className}} {
 
   set {{=field.name}}(value) {
   {{? isString(field.type)}}
-    primitiveTypes.string__assign(this.__ref_message.{{=field.name}}, value);
+    primitiveTypes.string__assign(this.__ref_message.{{=field.name}}.ref(), value);
   {{?? true}}
     this.__ref_message.{{=field.name}} = value;
   {{?}}

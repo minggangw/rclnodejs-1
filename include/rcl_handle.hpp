@@ -53,6 +53,10 @@ class RclHandle : public Nan::ObjectWrap {
   static Nan::Persistent<v8::Function> constructor;
   static void New(const Nan::FunctionCallbackInfo<v8::Value>& info);
   static NAN_METHOD(Destroy);
+  static NAN_METHOD(Dismiss);
+
+  static NAN_GETTER(HandleGetter);
+  static NAN_GETTER(TypeGetter);
 
  private:
   void* pointer_;

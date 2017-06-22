@@ -18,11 +18,39 @@ namespace rclnodejs {
 
 Nan::Persistent<v8::Function> RclHandle::constructor;
 
-RclHandle::RclHandle() : handle_(nullptr) {
+RclHandle::RclHandle() : pointer_(nullptr), type_(RclHandleType_None) {
 }
 
 RclHandle::~RclHandle() {
-  free(handle_);
+  DestroyMe();
+}
+
+void RclHandle::DestroyMe() {
+  if (pointer_) {
+    switch (type_) {
+    case RclHandleType_None:
+      break;
+    case RclHandleType_ROSNode:
+      break;
+    case RclHandleType_ROSPublisher:
+      break;
+    case RclHandleType_ROSSubscription:
+      break;
+    case RclHandleType_ROSService:
+      break;
+    case RclHandleType_ROSClient:
+      break;
+    case RclHandleType_ROSIDLString:
+      break;
+    case RclHandleType_Malloc:
+      free(pointer_);
+      break;
+    case RclHandleType_Count:  // No need to do anything
+      break;
+    }
+  }
+  pointer_ = nullptr;
+  type_ = RclHandleType_None;
 }
 
 void RclHandle::Init(v8::Local<v8::Object> exports) {
@@ -32,6 +60,8 @@ void RclHandle::Init(v8::Local<v8::Object> exports) {
 
   constructor.Reset(tpl->GetFunction());
   exports->Set(Nan::New("RclHandle").ToLocalChecked(), tpl->GetFunction());
+
+  Nan::SetPrototypeMethod(tpl, "destroy", Destroy);
 }
 
 void RclHandle::New(const Nan::FunctionCallbackInfo<v8::Value>& info) {
@@ -42,7 +72,16 @@ void RclHandle::New(const Nan::FunctionCallbackInfo<v8::Value>& info) {
   }
 }
 
-v8::Local<v8::Object> RclHandle::NewInstance(void* handle) {
+NAN_METHOD(RclHandle::Destroy) {
+  auto me = Nan::ObjectWrap::Unwrap<RclHandle>(info.This());
+  if (me) {
+    me->DestroyMe();
+  }
+  info.GetReturnValue().Set(Nan::Undefined());
+}
+
+v8::Local<v8::Object> RclHandle::NewInstance(void* handle,
+    RclHandleType type) {
   Nan::EscapableHandleScope scope;
 
   v8::Local<v8::Function> cons = Nan::New<v8::Function>(constructor);
@@ -54,6 +93,7 @@ v8::Local<v8::Object> RclHandle::NewInstance(void* handle) {
 
   auto wrapper = Nan::ObjectWrap::Unwrap<RclHandle>(instance);
   wrapper->SetPtr(handle);
+  wrapper->SetType(type);
 
   return scope.Escape(instance);
 }

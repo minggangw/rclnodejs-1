@@ -27,7 +27,8 @@ const rosidl_generator_nodejs__String = StructType({
 });
 
 const libstd_msgs__rosidl_generator_c = ffi.Library('libstd_msgs__rosidl_generator_c', {
-  'rosidl_generator_c__String__assign': [ref.types.bool, [ref.refType(rosidl_generator_nodejs__String), ref.types.CString]],
+  rosidl_generator_c__String__assign: [ref.types.bool,
+                                        [ref.refType(rosidl_generator_nodejs__String), ref.types.CString]],
 });
 
 function ffi_rosidl_generator_nodejs__String__assign(buf, text) {

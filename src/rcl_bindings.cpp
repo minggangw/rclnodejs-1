@@ -18,6 +18,9 @@
 #include <rcl/error_handling.h>
 #include <rcl/node.h>
 #include <rcl/rcl.h>
+#include <rosidl_generator_c/string_functions.h>
+
+#include <string>
 
 #include "handle_manager.hpp"
 #include "rcl_handle.hpp"
@@ -73,7 +76,8 @@ NAN_METHOD(CreateNode) {
 
   *node = rcl_get_zero_initialized_node();
   rcl_node_options_t options = rcl_node_get_default_options();
-  if (rcl_node_init(node, node_name.c_str(), name_space.c_str(), &options) != RCL_RET_OK) {
+  if (rcl_node_init(node, node_name.c_str(),
+      name_space.c_str(), &options) != RCL_RET_OK) {
     Nan::ThrowError(rcl_get_error_string_safe());
     return;
   }
@@ -327,7 +331,7 @@ NAN_METHOD(CreateSubscription) {
   std::string topic(*Nan::Utf8String(info[4]->ToString()));
 
   rcl_subscription_t * subscription =
-    (rcl_subscription_t*)malloc(sizeof(rcl_subscription_t));
+    reinterpret_cast<rcl_subscription_t*>(malloc(sizeof(rcl_subscription_t)));
   *subscription = rcl_get_zero_initialized_subscription();
 
   rcl_subscription_options_t subscription_ops =
@@ -345,6 +349,25 @@ NAN_METHOD(CreateSubscription) {
   }
 
   info.GetReturnValue().Set(rclnodejs::RclHandle::NewInstance(subscription));
+}
+
+NAN_METHOD(ROSIDLStringAssign) {
+  void* buffer = node::Buffer::Data(info[0]->ToObject());
+  std::string value(*v8::String::Utf8Value(info[1]));
+  rosidl_generator_c__String* ptr =
+    reinterpret_cast<rosidl_generator_c__String*>(buffer);
+
+  // This call will free the previous allocated C-string
+  bool ret = rosidl_generator_c__String__assign(ptr, value.c_str());
+
+  if (ret) {
+    // We only book the clean-up call, a.k.a. free(),
+    //  of the mallocated C-string itself
+    info.GetReturnValue().Set(RclHandle::NewInstance(ptr->data,
+        RclHandleType_ROSIDLString));
+  } else {
+    info.GetReturnValue().Set(Nan::Undefined());
+  }
 }
 
 NAN_METHOD(Spin) {
@@ -387,6 +410,7 @@ BindingMethod binding_methods[] = {
   {"timerGetTimeUntilNextCall", TimerGetTimeUntilNextCall},
   {"rclTake", RclTake},
   {"createSubscription", CreateSubscription},
+  {"rosIDLStringAssign", ROSIDLStringAssign},
 
   {"createPublisher", CreatePublisher},
   {"rcl_publish_std_string_message", rcl_publish_std_string_message},

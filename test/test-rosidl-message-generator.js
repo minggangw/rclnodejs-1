@@ -41,6 +41,8 @@ describe('ROSIDL Node.js message generator test suite', function() {
           });
         });
         done();
+      }).catch(e => {
+        console.log(e);
       });
     });
   });

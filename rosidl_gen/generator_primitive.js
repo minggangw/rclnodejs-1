@@ -20,14 +20,14 @@ const rclnodejs = require('bindings')('rclnodejs');
 
 /* eslint-disable camelcase */
 
-const rosidl_generator_nodejs__String = StructType({
+const StringRefStruct = StructType({
   data: ref.types.CString,
   size: ref.types.size_t,
   capacity: ref.types.size_t,
 });
 
 function initString(str) {
-  if (! str instanceof rosidl_generator_nodejs__String) {
+  if (! str instanceof StringRefStruct) {
     throw new TypeError('Invalid argument: should provide a type of rosidl_generator_nodejs__String');
   }
 
@@ -50,8 +50,7 @@ module.exports = {
   float32: ref.types.float,
   char: ref.types.char,
   byte: ref.types.byte,
-
-  string: rosidl_generator_nodejs__String,
+  string: StringRefStruct,
   initString: initString
 };
 

@@ -46,4 +46,6 @@ rclnodejs.init().then(() => {
   }, 10);
 
   rclnodejs.spin(node);
+}).catch(e => {
+  console.log(e);
 });

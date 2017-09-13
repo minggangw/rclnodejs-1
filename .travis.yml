@@ -27,7 +27,7 @@ before_install:
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then brew install opencv; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then  python3 -m pip install argcomplete coverage empy flake8 flake8-blind-except flake8-builtins flake8-class-newline flake8-comprehensions flake8-deprecated flake8-docstrings flake8-import-order flake8-quotes mock nose pep8 pydocstyle pyflakes pyyaml setuptools vcstool; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then brew install opencv; fi
-  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then echo 'export PATH=/usr/local/Cellar/numpy/1.13.1_1/libexec/nose/bin:$PATH' >> $HOME/.bash_profile; fi
+  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then export PATH=/usr/local/Cellar/numpy/1.13.1_1/libexec/nose/bin:$PATH; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then mkdir -p ~/ros2_ws/src; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then cd ~/ros2_ws; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then wget https://raw.githubusercontent.com/ros2/ros2/master/ros2.repos; fi

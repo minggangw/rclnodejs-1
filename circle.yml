@@ -28,5 +28,5 @@ dependencies:
     - src/ament/ament_tools/scripts/ament.py build --symlink-install
 
   override:
-    - source ~/ros2_ws/install/local_setup.bash
+    - source ~/rclnodejs-1/install/local_setup.bash
     - npm install

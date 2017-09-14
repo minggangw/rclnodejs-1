@@ -29,7 +29,7 @@ before_install:
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then brew install opencv; fi
 
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then  wget -qO- https://raw.githubusercontent.com/creationix/nvm/v0.33.2/install.sh | bash; fi
-  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then . $HOME/.nvm/nvm.sh; fi
+  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then source $HOME/.nvm/nvm.sh; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then nvm install v6.11.3; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then nvm alias default v6.11.3; fi
 

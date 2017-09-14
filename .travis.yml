@@ -32,7 +32,7 @@ before_install:
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then cd ~/ros2_ws; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then wget https://raw.githubusercontent.com/ros2/ros2/master/ros2.repos; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then vcs import src < ros2.repos; fi
-  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then travis_wait 90 src/ament/ament_tools/scripts/ament.py build --build-tests --symlink-install; fi
+  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then src/ament/ament_tools/scripts/ament.py build --symlink-install; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then echo "source $HOME/install/local_setup.bash" >> $HOME/.bash_profile; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then  wget -qO- https://raw.githubusercontent.com/creationix/nvm/v0.33.2/install.sh | bash; fi
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then . $HOME/.nvm/nvm.sh; fi

@@ -9,7 +9,6 @@ general:
 
 dependencies:
   pre:
-    - /usr/bin/yes | pip uninstall numpy
     - brew update
     - brew tap homebrew/science
     - brew tap ros/deps

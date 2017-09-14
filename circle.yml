@@ -12,7 +12,7 @@ dependencies:
     - brew update
     - brew tap homebrew/science
     - brew tap ros/deps
-    - brew install python3 wget cmake cppcheck tinyxml eigen pcre
+    - brew install python3 cmake wget cppcheck tinyxml eigen pcre
     - brew install asio tinyxml2
     - brew install opencv
     - python3 -m pip install argcomplete coverage empy flake8 flake8-blind-except flake8-builtins flake8-class-newline flake8-comprehensions flake8-deprecated flake8-docstrings flake8-import-order flake8-quotes mock nose pep8 pydocstyle pyflakes pyyaml setuptools vcstool
@@ -28,4 +28,4 @@ dependencies:
     - src/ament/ament_tools/scripts/ament.py build --symlink-install
 
   override:
-    - source ~/rclnodejs-1/install/local_setup.bash && npm install
+    - npm install node-gyp -g && source ~/rclnodejs-1/install/local_setup.bash && echo $DYLD_LIBRARY_PATH && export DYLD_LIBRARY_PATH=~/rclnodejs-1/install/lib:$DYLD_LIBRARY_PATH && echo $DYLD_LIBRARY_PATH && npm install

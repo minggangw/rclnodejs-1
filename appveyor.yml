@@ -9,6 +9,8 @@ image: Visual Studio 2017
 environment:
   nodejs_version: "6.11.3"
   PYTHON: "C:\\Python36-x64"
+  matrix:
+    - VSVER: 14
 
 clone_folder: c:\proj\rclnodejs
 
@@ -17,7 +19,6 @@ platform:
 
 before_build:
   - cmd: |
-         pip install vcstool
          cd c:\
          md download
          cd download
@@ -25,30 +26,17 @@ before_build:
          appveyor DownloadFile https://github.com/ros2/choco-packages/releases/download/2017-04-04-1/eigen.3.3.3.nupkg
          appveyor DownloadFile https://github.com/ros2/choco-packages/releases/download/2017-04-04-1/tinyxml-usestl.2.6.2.nupkg
          appveyor DownloadFile https://github.com/ros2/choco-packages/releases/download/2017-04-04-1/tinyxml2.4.0.1.nupkg
-         dir
          choco install -y -s c:\download\ asio eigen tinyxml-usestl tinyxml2
+         appveyor DownloadFile http://ci.ros2.org/view/packaging/job/packaging_windows/lastSuccessfulBuild/artifact/ws/ros2-package-windows-AMD64.zip
+         7z x -y "c:\download\ros2-package-windows-AMD64.zip" -o"c:\opencv" > nul
   - "SET PATH=%PYTHON%;%PYTHON%\\bin;%PYTHON%\\Scripts;%PATH%"
   # Show version and architecture for Python
   - "%PYTHON%\\python.exe --version"
   - cmd: pip install -U setuptools pip
-  - cmd: pip install EmPy pyyaml
-  - cmd: pip install nose coverage mock
-  - cmd: pip install flake8 flake8-blind-except flake8-builtins flake8-class-newline flake8-comprehensions flake8-deprecated flake8-docstrings flake8-import-order flake8-quotes pep8 pydocstyle pyflakes
-  - cmd: pip install trollius
-  - cmd: choco install -y cppcheck
-  - cmd: appveyor DownloadFile https://github.com/ros2/ros2/releases/download/release-beta2/opencv-2.4.13.2-vc14.VS2015.zip
-  - 7z x -y "c:\download\opencv-2.4.13.2-vc14.VS2015.zip" -o"c:\opencv" > nul
-  - cmd: setx -m OpenCV_DIR C:\opencv
-  - cmd: cd c:\
-  - cmd: md c:\dev\ros2\src
-  - cmd: cd c:\dev\ros2
-  - curl -sk https://raw.githubusercontent.com/ros2/ros2/master/ros2.repos -o ros2.repos
-  - cmd: vcs import src < ros2.repos
-  - cmd: python src\ament\ament_tools\scripts\ament.py build
 
 build_script:
   - git submodule update --init --recursive
-  - cmd: call c:\dev\ros2\install\local_setup.bat
+  - cmd: call c:\ros2-windows\local_setup.bat
   - set PYTHON=C:\Python27-x64
   - npm install
 

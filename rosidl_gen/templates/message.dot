@@ -175,6 +175,12 @@ class {{=objectWrapper}} {
     this.serialize();
   }
 
+  static createFromRefObject(refObject) {
+    let self = new {{=objectWrapper}}();
+    self.copyRefObject(refObject);
+    return self;
+  }
+
   static createArray() {
     return new {{=arrayWrapper}};
   }
@@ -198,6 +204,7 @@ class {{=objectWrapper}} {
   serialize() {
     {{~ it.spec.fields :field}}
     {{? !field.type.isPrimitiveType || field.type.isArray || (field.type.type === 'string' && it.spec.msgName !== 'String')}}
+    this._wrapperFields.{{=field.name}}.serialize();
     this._refObject.{{=field.name}} = this._wrapperFields.{{=field.name}}.refObject;
     {{?}}
     {{~}}
@@ -208,20 +215,22 @@ class {{=objectWrapper}} {
     {{? !field.type.isPrimitiveType && !field.type.isArray}}
     this._wrapperFields.{{=field.name}}._refObject = this._refObject.{{=field.name}};
     this._wrapperFields.{{=field.name}}.deserialize();
-    {{?? !field.type.isPrimitiveType && field.type.isArray}}
-    this._wrapperFields.{{=field.name}}._refObject = this._refObject.{{=field.name}};
-    this._wrapperFields.{{=field.name}}.data.forEach((wrapper, index) => {
-      wrapper._refObject = this._wrapperFields.{{=field.name}}._refArray[index];
-      wrapper.deserialize();
-    });
     {{?? field.type.isPrimitiveType && field.type.isArray}}
-    let {{=field.name}}Primitives = this._refObject.{{=field.name}}.data;
-    {{=field.name}}Primitives.length = this._refObject.{{=field.name}}.size;
-    let {{=field.name}}Values = [];
-    {{=field.name}}Primitives.toArray().forEach(value =>{
-      {{=field.name}}Values.push(value.data);
+    let {{=field.name}}Array = this._refObject.{{=field.name}}.data;
+    {{=field.name}}Array.length = this._refObject.{{=field.name}}.size;
+    let {{=field.name}}s  = [];
+    {{=field.name}}Array.toArray().forEach(value =>{
+      {{=field.name}}s.push(value.data);
     });
-    this._wrapperFields.{{=field.name}}.setWrappers({{=field.name}}Values);
+    this._wrapperFields.{{=field.name}}.fill({{=field.name}}s);
+    {{?? !field.type.isPrimitiveType && field.type.isArray}}
+    let {{=field.name}}Array = this._refObject.{{=field.name}}.data;
+    {{=field.name}}Array.length = this._refObject.{{=field.name}}.size;
+    let {{=field.name}}s = [];
+    {{=field.name}}Array.toArray().forEach(value =>{
+      {{=field.name}}s.push({{=getWrapperNameByType(field.type)}}.createFromRefObject(value));
+    });
+    this._wrapperFields.{{=field.name}}.setWrappers({{=field.name}}s);
     {{?? !field.type.isArray && field.type.type === 'string' && it.spec.msgName !== 'String'}}
     this._wrapperFields.{{=field.name}}.data = this._refObject.{{=field.name}}.data;
     {{?}}
@@ -249,6 +258,8 @@ class {{=objectWrapper}} {
       values.push(wrapper.data);
     });
     return values;
+    {{?? field.type.isArray && !field.type.isPrimitiveType}}
+    return this._wrapperFields.{{=field.name}};
     {{?? !field.type.isPrimitiveType && !field.type.isArray}}
     return this._wrapperFields.{{=field.name}};
     {{?? !field.type.isArray && field.type.type === 'string' && it.spec.msgName !== 'String'}}
@@ -278,6 +289,16 @@ class {{=objectWrapper}} {
   }
   {{~}}
 
+  copyRefObject(refObject) {
+    this._refObject = new {{=refObjectType}}(refObject.toObject());
+
+    {{~ it.spec.fields :field}}
+    {{? !field.type.isPrimitiveType || field.type.isArray || (field.type.type === 'string' && it.spec.msgName !== 'String')}}
+    this._wrapperFields.{{=field.name}}.copyRefObject(this._refObject.{{=field.name}});
+    {{?}}
+    {{~}}
+  }
+
   copy(other) {
     this._refObject = new {{=refObjectType}}(other._refObject.toObject());
 
@@ -293,9 +314,6 @@ class {{=objectWrapper}} {
 class {{=arrayWrapper}} {
   constructor(size = 0) {
     this._resize(size);
-    this._refObject = new {{=refObjectArrayType}};
-    this._refObject.size = size;
-    this._refObject.capacity = size;
   }
 
   toRawROS() {
@@ -303,22 +321,62 @@ class {{=arrayWrapper}} {
   }
 
   setWrappers(wrappers) {
-    this._refArray = new {{=refArrayType}}(wrappers.length);
-    this._wrappers = [];
+    this._resize(wrappers.length)
 
     wrappers.forEach((value, index) => {
       {{? primitiveBaseType.indexOf(it.spec.baseType.type) !== -1}}
       let wrapper = new {{=objectWrapper}}();
       wrapper.data = value;
+      this._wrappers[index].copy(wrapper);
       {{??}}
-      let wrapper = new {{=objectWrapper}}(value);
+      this._wrappers[index].copy(value);
       {{?}}
-      this._wrappers.push(wrapper);
-      this._refArray[index] = wrapper.refObject;
+      this._refArray[index] = this._wrappers[index].refObject;
     });
     this._refObject.size = wrappers.length;
     this._refObject.capacity = wrappers.length;
     this._refObject.data = this._refArray.buffer;
+  }
+
+  fill(values) {
+    let length = values.length;
+    this._resize(length);
+    {{? isPrimitivePackage(it.spec.baseType)}}
+    values.forEach((value, index) => {
+      let wrapper = new {{=objectWrapper}}();
+      wrapper.data = value;
+      this._wrappers[index] = wrapper;
+    });
+    {{?? true}}
+    values.forEach((value, index) => {
+      this._wrappers[index].copy(value);
+    });
+    {{?}}
+  }
+
+  serialize() {
+    this._wrappers.forEach((wrapper, index) => {
+      wrapper.serialize();
+      this._refArray[index] = wrapper.refObject;
+    });
+    this._refObject.size = this._wrappers.length;
+    this._refObject.capacity = this._wrappers.length;
+    this._refObject.data = this._refArray.buffer;
+  }
+
+  deserialize(refObj) {
+    this._refObject = refObj;
+    let refObjectArray = this._refObject.data.toArray();
+    refObjectArray.length = this._refObject.size;
+    this._resize(this._refObject.size);
+
+    refObjectArray.forEach(element => {
+      this._wrappers[index].copyRefObject(element);
+    });
+  }
+
+  get refObject() {
+    return this._refObject;
   }
 
   get data() {
@@ -360,10 +418,11 @@ class {{=arrayWrapper}} {
       throw new RangeError('Invalid argument: should provide a positive number');
       return;
     }
+    this._refArray = new {{=refArrayType}}(size);
+    this._refObject = new {{=refObjectArrayType}}();
+    this._refObject.size = size;
+    this._refObject.capacity = size;
 
-    this._refArray = new ArrayType({{=refObjectType}});
-    this._refArray.size = size;
-    this._refArray.capacity = size;
     this._wrappers = new Array();
     for (let i = 0; i < size; i++) {
       this._wrappers.push(new {{=objectWrapper}}());

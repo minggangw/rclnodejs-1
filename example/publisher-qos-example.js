@@ -34,6 +34,13 @@ rclnodejs.init().then(() => {
 
   let counter = 0;
   setInterval(function() {
+    let str1 = new String();
+    str1.data = 'hello world';
+    let str2 = new String(str1);
+    console.log('str2 = ' + str2.data);
+    str1.data = '=============';
+    console.log('str2 = ' + str1.data);    
+    console.log('str2 = ' + str2.data);
     console.log(`Publishing message: Hello ROS ${counter}`);
     publisher.publish(`Hello ROS ${counter++}`);
   }, 1000);

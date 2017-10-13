@@ -4,9 +4,9 @@ machine:
 
 dependencies:
   pre:
+    - xcode-select --install
     - brew update
-    - brew tap homebrew/science
-    - brew tap ros/deps
+    - brew doctor
     - brew install python3 cmake wget cppcheck tinyxml eigen pcre
     - brew install asio tinyxml2
     - brew install opencv

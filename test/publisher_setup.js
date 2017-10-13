@@ -28,7 +28,7 @@ rclnodejs.init().then(function() {
   setTimeout(function() {
     node.destroy();
     rclnodejs.shutdown();
-  }, 1 * 1000);
+  }, 100);
 }).catch(function(err) {
   console.log(err);
 });

@@ -14,6 +14,8 @@
 
 #include "rcl_bindings.hpp"
 
+#include <stdio.h>
+
 #include <rcl/error_handling.h>
 #include <rcl/node.h>
 #include <rcl/rcl.h>
@@ -151,7 +153,7 @@ NAN_METHOD(RclTake) {
   rcl_subscription_t* subscription =
       reinterpret_cast<rcl_subscription_t*>(subscription_handle->ptr());
   void* msg_taken = node::Buffer::Data(info[1]->ToObject());
-
+  printf("address = %x\n", msg_taken);
   rcl_ret_t ret = rcl_take(subscription, msg_taken, nullptr);
 
   if (ret != RCL_RET_OK && ret != RCL_RET_SUBSCRIPTION_TAKE_FAILED) {

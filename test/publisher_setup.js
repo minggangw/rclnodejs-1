@@ -21,7 +21,7 @@ rclnodejs.init().then(function() {
   const RclString = rclnodejs.require('std_msgs').msg.String;
 
   let msg = new RclString();
-  msg.data = 'Greeting from publisher';
+  msg.data = 'Greeting';
 
   var publisher = node.createPublisher(RclString, 'topic');
   publisher.publish(msg);

@@ -38,7 +38,7 @@ describe('rclnodejs interactive testing', function() {
       var subscription = node.createSubscription(RclString, 'topic', function(msg) {
         assert.deepStrictEqual(typeof msg, 'object');
         assert.ok('data' in msg);
-        assert.deepStrictEqual(msg.data, 'Greeting from publisher');
+        assert.deepStrictEqual(msg.data, 'Greeting');
 
         if (!destroy) {
           publisher.kill('SIGINT');

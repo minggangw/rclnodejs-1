@@ -36,6 +36,14 @@ function initString(str) {
   str.capacity = 1;
 }
 
+function stringInit(buf) {
+  if (! buf instanceof Buffer) {
+    throw new TypeError('Invalid argument: should provide a Node Buffer to bindingsStringInit()');
+  }
+
+  return rclnodejs.rosIDLStringInit(buf);
+}
+
 module.exports = {
   bool: ref.types.bool,
   int8: ref.types.int8,
@@ -51,7 +59,8 @@ module.exports = {
   char: ref.types.char,
   byte: ref.types.byte,
   string: StringRefStruct,
-  initString: initString
+  initString: initString,
+  stringInit: stringInit
 };
 
 /* eslint-enable camelcase */

@@ -435,6 +435,15 @@ NAN_METHOD(Shutdown) {
   info.GetReturnValue().Set(Nan::Undefined());
 }
 
+NAN_METHOD(ROSIDLStringInit) {
+    void* buffer = node::Buffer::Data(info[0]->ToObject());
+    rosidl_generator_c__String* ptr =
+        reinterpret_cast<rosidl_generator_c__String*>(buffer);
+  
+    rosidl_generator_c__String__init(ptr);
+    info.GetReturnValue().Set(Nan::Undefined());
+}
+
 uint32_t GetBindingMethodsCount(BindingMethod* methods) {
   uint32_t count = 0;
   while (methods[count].function) {
@@ -465,6 +474,7 @@ BindingMethod binding_methods[] = {
     {"rclTakeRequest", RclTakeRequest},
     {"sendResponse", SendResponse},
     {"shutdown", Shutdown},
+    {"rosIDLStringInit", ROSIDLStringInit},
     {"", nullptr}};
 
 }  // namespace rclnodejs

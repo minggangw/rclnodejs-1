@@ -168,7 +168,7 @@ class {{=objectWrapper}} {
       {{?? !field.type.isPrimitiveType || (field.type.type === 'string' && it.spec.msgName !== 'String')}}
       this._wrapperFields.{{=field.name}} = new {{=getWrapperNameByType(field.type)}}();
       {{?? it.spec.msgName === 'String'}}
-      primitiveTypes.initString(this._refObject);
+      primitiveTypes.stringInit(this._refObject.ref());
       {{?}}
       {{~}}
     }

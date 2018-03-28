@@ -102,7 +102,7 @@ NAN_METHOD(ShadowNode::Stop) {
 NAN_METHOD(ShadowNode::SyncHandles) {
   auto* me = Nan::ObjectWrap::Unwrap<ShadowNode>(info.Holder());
   if (me) {
-    me->handle_manager()->ClearHandles();
+    // me->handle_manager()->ClearHandles();
     me->handle_manager()->CollectHandles(me->handle());
   }
 }

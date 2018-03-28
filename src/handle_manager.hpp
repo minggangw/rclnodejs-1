@@ -17,6 +17,8 @@
 
 #include <nan.h>
 #include <rcl/wait.h>
+
+#include <atomic>
 #include <vector>
 
 namespace rclnodejs {
@@ -35,6 +37,10 @@ class HandleManager {
 
   bool AddHandlesToWaitSet(rcl_wait_set_t* wait_set);
   void ClearHandles();
+  void WaitForSynchronizing() { uv_sem_wait(&sem_); }
+
+  uv_mutex_t* mutex() { return &mutex_; }
+  bool is_synchronizing() { return is_synchronizing_.load(); }
 
  protected:
   template<typename T> void CollectHandlesByType(
@@ -48,6 +54,8 @@ class HandleManager {
   std::vector<const rcl_guard_condition_t*> guard_conditions_;
 
   uv_mutex_t mutex_;
+  uv_sem_t sem_;
+  std::atomic_bool is_synchronizing_;
 };
 
 }  // namespace rclnodejs

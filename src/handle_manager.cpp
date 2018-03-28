@@ -30,17 +30,21 @@ struct ScopedMutex {
 };
 
 HandleManager::HandleManager() {
+  is_synchronizing_.store(false);
   uv_mutex_init(&mutex_);
+  uv_sem_init(&sem_, 0);
 }
 
 HandleManager::~HandleManager() {
   uv_mutex_destroy(&mutex_);
+  uv_sem_destroy(&sem_);
 }
 
 void HandleManager::CollectHandles(const v8::Local<v8::Object> node) {
+  is_synchronizing_.store(true);
+  uv_mutex_lock(&mutex_);
   ClearHandles();
-
-  ScopedMutex scoped_mutex(mutex_);
+  // ScopedMutex scoped_mutex(mutex_);
   Nan::HandleScope scope;
   Nan::MaybeLocal<v8::Value> timers =
       Nan::Get(node, Nan::New("_timers").ToLocalChecked());
@@ -58,6 +62,10 @@ void HandleManager::CollectHandles(const v8::Local<v8::Object> node) {
                        &clients_);
   CollectHandlesByType(services.ToLocalChecked()->ToObject(),
                        &services_);
+  uv_mutex_unlock(&mutex_);
+  is_synchronizing_.store(false);
+  uv_sem_post(&sem_);
+
   SPDLOG_DEBUG(spdlog::get("rclnodejs"),
       "Add {0:d} timers, {1:d} subscriptions, {2:d} clients, {3:d} services.",
       timers_.size(), subscriptions_.size(), clients_.size(), services_.size());
@@ -80,7 +88,7 @@ uint32_t HandleManager::TimersCount() {
 }
 
 bool HandleManager::AddHandlesToWaitSet(rcl_wait_set_t* wait_set) {
-  ScopedMutex scoped_mutex(mutex_);
+  // ScopedMutex scoped_mutex(mutex_);
 
   for (auto& timer : timers_) {
     if (rcl_wait_set_add_timer(wait_set, timer) != RCL_RET_OK)
@@ -103,7 +111,7 @@ bool HandleManager::AddHandlesToWaitSet(rcl_wait_set_t* wait_set) {
 }
 
 void HandleManager::ClearHandles() {
-  ScopedMutex scoped_mutex(mutex_);
+  // ScopedMutex scoped_mutex(mutex_);
   timers_.clear();
   clients_.clear();
   services_.clear();
@@ -115,7 +123,7 @@ template <typename T>
 void HandleManager::CollectHandlesByType(
     const v8::Local<v8::Object>& typeObject,
     std::vector<const T*>* vec) {
-  ScopedMutex scoped_mutex(mutex_);
+  // ScopedMutex scoped_mutex(mutex_);
   Nan::HandleScope scope;
 
   if (typeObject->IsArray()) {

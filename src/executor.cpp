@@ -100,6 +100,11 @@ void Executor::Run(void* arg) {
     }
 
     while (executor->running_.load()) {
+      if (handle_manager->is_synchronizing())
+        handle_manager->WaitForSynchronizing();
+
+      uv_mutex_lock(handle_manager->mutex());
+
       if (rcl_wait_set_resize_subscriptions(
               &wait_set, handle_manager->SubscriptionsCount()) != RCL_RET_OK) {
         throw std::runtime_error(
@@ -165,6 +170,8 @@ void Executor::Run(void* arg) {
       if (rcl_wait_set_clear_timers(&wait_set) != RCL_RET_OK) {
         throw std::runtime_error("Couldn't clear timers from waitset");
       }
+
+      uv_mutex_unlock(handle_manager->mutex());
     }
 
     if (rcl_wait_set_fini(&wait_set) != RCL_RET_OK) {

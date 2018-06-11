@@ -1,4 +1,4 @@
-FROM ubuntu:xenial
+FROM ubuntu: bionic
 
 ENV GIT_USER_NAME mrbuild
 ENV GIT_USER_EMAIL mrbuild@github.com
@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y git wget locales python
 # Install ROS2 requirements
 RUN locale-gen en_US en_US.UTF-8 && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 
-RUN /bin/bash -c 'echo "deb http://packages.ros.org/ros/ubuntu xenial main" > /etc/apt/sources.list.d/ros-latest.list' \
+RUN /bin/bash -c 'echo "deb http://packages.ros.org/ros/ubuntu bionic main" > /etc/apt/sources.list.d/ros-latest.list' \
     && apt-key adv  --keyserver ha.pool.sks-keyservers.net --recv-keys 421C365BD9FF1F717815A3895523BAEEB01FA116
 
 RUN apt-get update && apt-get install -y build-essential cppcheck cmake libopencv-dev \

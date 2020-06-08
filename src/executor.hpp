@@ -50,7 +50,10 @@ class Executor {
   static void Run(void* arg);
 
  private:
+  // Returns true if there is ready callback to be handled.
   bool WaitForReadyCallbacks(rcl_wait_set_t* wait_set, int32_t time_out);
+
+  // Calls the callback of the ready handle.
   void ExecuteReadyHandles();
 
   uv_async_t* async_;

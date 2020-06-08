@@ -24,56 +24,61 @@ namespace rclnodejs {
 
 HandleManager::HandleManager() {
   is_synchronizing_.store(false);
+  uv_rwlock_init(&sync_handles_rwlock_);
+  uv_rwlock_init(&ready_handles_rwlock_);
   uv_mutex_init(&mutex_);
   uv_sem_init(&sem_, 0);
 }
 
 HandleManager::~HandleManager() {
   uv_mutex_destroy(&mutex_);
+  uv_rwlock_destroy(&sync_handles_rwlock_);
+  uv_rwlock_destroy(&ready_handles_rwlock_);
   uv_sem_destroy(&sem_);
 }
 
-void HandleManager::CollectHandles(const v8::Local<v8::Object> node) {
+void HandleManager::SynchronizeHandles(const v8::Local<v8::Object> node) {
+  Nan::HandleScope scope;
+  Nan::MaybeLocal<v8::Value> timers =
+      Nan::Get(node, Nan::New("_timers").ToLocalChecked());
+  Nan::MaybeLocal<v8::Value> subscriptions =
+      Nan::Get(node, Nan::New("_subscriptions").ToLocalChecked());
+  Nan::MaybeLocal<v8::Value> clients =
+      Nan::Get(node, Nan::New("_clients").ToLocalChecked());
+  Nan::MaybeLocal<v8::Value> services =
+      Nan::Get(node, Nan::New("_services").ToLocalChecked());
+  Nan::MaybeLocal<v8::Value> guard_conditions =
+      Nan::Get(node, Nan::New("_guards").ToLocalChecked());
+  Nan::MaybeLocal<v8::Value> action_clients =
+      Nan::Get(node, Nan::New("_actionClients").ToLocalChecked());
+  Nan::MaybeLocal<v8::Value> action_servers =
+      Nan::Get(node, Nan::New("_actionServers").ToLocalChecked());
   is_synchronizing_.store(true);
 
   {
-    ScopedMutex mutex(&mutex_);
+    ScopedReadWriteLock scoped_lock(&sync_handles_rwlock_,
+                                    ScopedReadWriteLock::LockType::kWrite);
     ClearHandles();
-    Nan::HandleScope scope;
-    Nan::MaybeLocal<v8::Value> timers =
-        Nan::Get(node, Nan::New("_timers").ToLocalChecked());
-    Nan::MaybeLocal<v8::Value> subscriptions =
-        Nan::Get(node, Nan::New("_subscriptions").ToLocalChecked());
-    Nan::MaybeLocal<v8::Value> clients =
-        Nan::Get(node, Nan::New("_clients").ToLocalChecked());
-    Nan::MaybeLocal<v8::Value> services =
-        Nan::Get(node, Nan::New("_services").ToLocalChecked());
-    Nan::MaybeLocal<v8::Value> guard_conditions =
-        Nan::Get(node, Nan::New("_guards").ToLocalChecked());
-    Nan::MaybeLocal<v8::Value> action_clients =
-        Nan::Get(node, Nan::New("_actionClients").ToLocalChecked());
-    Nan::MaybeLocal<v8::Value> action_servers =
-        Nan::Get(node, Nan::New("_actionServers").ToLocalChecked());
 
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(timers.ToLocalChecked()).ToLocalChecked(),
         &timers_);
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(subscriptions.ToLocalChecked()).ToLocalChecked(),
         &subscriptions_);
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(clients.ToLocalChecked()).ToLocalChecked(),
         &clients_);
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(services.ToLocalChecked()).ToLocalChecked(),
         &services_);
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(guard_conditions.ToLocalChecked()).ToLocalChecked(),
         &guard_conditions_);
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(action_clients.ToLocalChecked()).ToLocalChecked(),
         &action_clients_);
-    CollectHandlesByType(
+    SynchronizeHandlesByType(
         Nan::To<v8::Object>(action_servers.ToLocalChecked()).ToLocalChecked(),
         &action_servers_);
   }
@@ -137,22 +142,29 @@ bool HandleManager::AddHandlesToWaitSet(rcl_wait_set_t* wait_set) {
   return true;
 }
 
-bool HandleManager::CollectReadyHandles(rcl_wait_set_t* wait_set) {
-  ready_handles_.clear();
-
+rcl_ret_t HandleManager::CollectReadyHandles(rcl_wait_set_t* wait_set) {
+  std::vector<rclnodejs::RclHandle*> ready_handles;
   CollectReadyHandlesByType(wait_set->subscriptions,
-                            wait_set->size_of_subscriptions, subscriptions_);
+                            wait_set->size_of_subscriptions, subscriptions_,
+                            ready_handles);
   CollectReadyHandlesByType(wait_set->clients, wait_set->size_of_clients,
-                            clients_);
+                            clients_, ready_handles);
   CollectReadyHandlesByType(wait_set->services, wait_set->size_of_services,
-                            services_);
-  CollectReadyHandlesByType(wait_set->timers, wait_set->size_of_timers,
-                            timers_);
+                            services_, ready_handles);
+  CollectReadyHandlesByType(wait_set->timers, wait_set->size_of_timers, timers_,
+                            ready_handles);
   CollectReadyHandlesByType(wait_set->guard_conditions,
                             wait_set->size_of_guard_conditions,
-                            guard_conditions_);
+                            guard_conditions_, ready_handles);
 
-  return CollectReadyActionHandles(wait_set);
+  rcl_ret_t ret = CollectReadyActionHandles(wait_set, ready_handles);
+  if (!ready_handles.empty()) {
+    ScopedReadWriteLock scoped_lock(&ready_handles_rwlock_,
+                                    ScopedReadWriteLock::LockType::kWrite);
+    ready_handles_ = std::move(ready_handles);
+  }
+
+  return ret;
 }
 
 bool HandleManager::GetEntityCounts(size_t* subscriptions_size,
@@ -208,6 +220,20 @@ bool HandleManager::GetEntityCounts(size_t* subscriptions_size,
   return true;
 }
 
+std::vector<rclnodejs::RclHandle*> HandleManager::TakeReadyHandles() {
+  std::vector<rclnodejs::RclHandle*> handles_to_be_taken;
+  ScopedReadWriteLock scoped_lock(&ready_handles_rwlock_,
+                                  ScopedReadWriteLock::LockType::kWrite);
+  handles_to_be_taken.swap(ready_handles_);
+  return handles_to_be_taken;
+}
+
+uint32_t HandleManager::ready_handles_count() {
+  ScopedReadWriteLock scoped_lock(&ready_handles_rwlock_,
+                                  ScopedReadWriteLock::LockType::kRead);
+  return ready_handles_.size();
+}
+
 void HandleManager::ClearHandles() {
   timers_.clear();
   clients_.clear();
@@ -218,7 +244,7 @@ void HandleManager::ClearHandles() {
   action_servers_.clear();
 }
 
-void HandleManager::CollectHandlesByType(
+void HandleManager::SynchronizeHandlesByType(
     const v8::Local<v8::Object>& typeObject,
     std::vector<rclnodejs::RclHandle*>* vec) {
   Nan::HandleScope scope;
@@ -247,19 +273,22 @@ void HandleManager::CollectHandlesByType(
 template <typename T>
 void HandleManager::CollectReadyHandlesByType(
     const T** struct_ptr, size_t size,
-    const std::vector<rclnodejs::RclHandle*>& handles) {
+    const std::vector<rclnodejs::RclHandle*>& handles,
+    std::vector<rclnodejs::RclHandle*>& ready_handles) {
   for (size_t idx = 0; idx < size; ++idx) {
     if (struct_ptr[idx]) {
       for (auto& handle : handles) {
         if (struct_ptr[idx] == handle->ptr()) {
-          ready_handles_.push_back(handle);
+          ready_handles.push_back(handle);
         }
       }
     }
   }
 }
 
-bool HandleManager::CollectReadyActionHandles(rcl_wait_set_t* wait_set) {
+rcl_ret_t HandleManager::CollectReadyActionHandles(
+    rcl_wait_set_t* wait_set,
+    std::vector<rclnodejs::RclHandle*>& ready_handles) {
   for (auto& action_client : action_clients_) {
     bool is_feedback_ready = false;
     bool is_status_ready = false;
@@ -274,7 +303,7 @@ bool HandleManager::CollectReadyActionHandles(rcl_wait_set_t* wait_set) {
         &is_goal_response_ready, &is_cancel_response_ready,
         &is_result_response_ready);
     if (ret != RCL_RET_OK) {
-      return false;
+      return ret;
     }
 
     action_client->SetBoolProperty("isFeedbackReady", is_feedback_ready);
@@ -288,7 +317,7 @@ bool HandleManager::CollectReadyActionHandles(rcl_wait_set_t* wait_set) {
 
     if (is_feedback_ready || is_status_ready || is_goal_response_ready ||
         is_cancel_response_ready || is_result_response_ready) {
-      ready_handles_.push_back(action_client);
+      ready_handles.push_back(action_client);
     }
   }
 
@@ -304,7 +333,7 @@ bool HandleManager::CollectReadyActionHandles(rcl_wait_set_t* wait_set) {
         wait_set, rcl_action_server, &is_goal_request_ready,
         &is_cancel_request_ready, &is_result_request_ready, &is_goal_expired);
     if (ret != RCL_RET_OK) {
-      return false;
+      return ret;
     }
 
     action_server->SetBoolProperty("isGoalRequestReady", is_goal_request_ready);
@@ -316,11 +345,11 @@ bool HandleManager::CollectReadyActionHandles(rcl_wait_set_t* wait_set) {
 
     if (is_goal_request_ready || is_cancel_request_ready ||
         is_result_request_ready || is_goal_expired) {
-      ready_handles_.push_back(action_server);
+      ready_handles.push_back(action_server);
     }
   }
 
-  return true;
+  return RCL_RET_OK;
 }
 
 }  // namespace rclnodejs

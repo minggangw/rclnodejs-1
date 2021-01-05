@@ -24,7 +24,7 @@ rclnodejs.init().then(() => {
 - [Using TypeScript](#using-typescript)
 - [Examples](https://github.com/RobotWebTools/rclnodejs/tree/develop/example)
 - [FAQ and Known Issues](./docs/FAQ.md)
-- [Building](./docs/BUILDING.md)
+- [Building from Scratch](./docs/BUILDING.md)
 - [Contributing](#contributing)
 
 ## Installation
@@ -100,17 +100,14 @@ const msg: rclnodejs.std_msgs.msg.String = {
 };
 ```
 
-## Getting Involved
+## Contributing
 
-### Contributing
+Please make sure to read the [Contributing Guide]() before making a pull request.
 
-If you would like to contribute code to this project:
-1. Fork the `rclnodejs` project. 
-2. Submit your code as a pull request (PR) for review. 
-3. The PR will be reviewed by the project team members. When the PR has gained "Look Good To Me (LGTM)" status, the project maintainers will merge the PR.
+Thank you to all the [people](CONTRIBUTORS.md) who already contributed to rclnodejs!
 
-### Contributors
-[See project contributors.](./CONTRIBUTORS.md)
+[![](https://github.com/wayneparrott.png?size=25)](https://github.com/wayneparrott)
+[![](https://github.com/minggangw.png?size=25)](https://github.com/minggangw)
 
 ## License
 This project abides by the [Apache License 2.0](https://github.com/RobotWebTools/rclnodejs/blob/develop/LICENSE).

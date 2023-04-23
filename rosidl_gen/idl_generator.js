@@ -43,7 +43,11 @@ async function writeGeneratedCode(dir, fileName, code) {
   await fse.writeFile(path.join(dir, fileName), code);
 }
 
-async function generateServiceJSStruct(serviceInfo, dir) {
+async function generateServiceJSStruct(
+  serviceInfo,
+  dir,
+  isActionService = true
+) {
   dir = path.join(dir, `${serviceInfo.pkgName}`);
   const fileName =
     serviceInfo.pkgName +
@@ -52,29 +56,62 @@ async function generateServiceJSStruct(serviceInfo, dir) {
     '__' +
     serviceInfo.interfaceName +
     '.js';
+
   const generatedSrvCode = removeEmptyLines(
     dots.service({ serviceInfo: serviceInfo })
   );
-  let result = writeGeneratedCode(dir, fileName, generatedSrvCode);
 
-  if (DistroUtils.getDistroId() <= DistroUtils.getDistroId('humble')) {
-    return result;
+  if (
+    isActionService ||
+    DistroUtils.getDistroId() <= DistroUtils.getDistroId('humble')
+  ) {
+    return writeGeneratedCode(dir, fileName, generatedSrvCode);
   }
 
-  // Otherwise, for post-Humble ROS 2 releases generate service_event msgs
-  await result;
-  const eventFileName =
-    serviceInfo.pkgName +
-    '__' +
-    serviceInfo.subFolder +
-    '__' +
-    serviceInfo.interfaceName +
-    '_Event.js';
-  const generatedSrvEventCode = removeEmptyLines(
+  return writeGeneratedCode(dir, fileName, generatedSrvCode).then(() => {
+    return generateServiceEventMsg(serviceInfo, dir);
+  });
+}
+
+async function generateServiceEventMsg(serviceInfo, dir) {
+  const fileName = serviceInfo.interfaceName + '.msg';
+  const generatedEvent = removeEmptyLines(
     dots.service_event({ serviceInfo: serviceInfo })
   );
 
-  return writeGeneratedCode(dir, eventFileName, generatedSrvEventCode);
+  return writeGeneratedCode(dir, fileName, generatedEvent).then(() => {
+    serviceInfo.interfaceName += '_Event';
+    serviceInfo.filePath = path.join(dir, fileName);
+    return generateServiceEventJSStruct(serviceInfo, dir);
+  });
+}
+
+async function generateServiceEventJSStruct(msgInfo, dir) {
+  const spec = await parser.parseMessageFile(msgInfo.pkgName, msgInfo.filePath);
+
+  // We will remove the `.msg` files generated in `generateServiceEventMsg()`.
+  fse.removeSync(msgInfo.filePath);
+  const eventFileName =
+    msgInfo.pkgName +
+    '__' +
+    msgInfo.subFolder +
+    '__' +
+    msgInfo.interfaceName +
+    '.js';
+  // Set `msgInfo.isServiceEvent` to true, so when requiring the
+  // Request/Response JavaScript files of the service, it will use "__srv__",
+  // e.g,
+  // require('../../generated/example_interfaces/example_interfaces__srv__AddTwoInts_Request.js');
+  msgInfo.isServiceEvent = true;
+  const generatedCode = removeEmptyLines(
+    dots.message({
+      messageInfo: msgInfo,
+      spec: spec,
+      json: JSON.stringify(spec, null, '  '),
+    })
+  );
+
+  return writeGeneratedCode(dir, eventFileName, generatedCode);
 }
 
 async function generateMessageJSStruct(messageInfo, dir) {
@@ -94,6 +131,7 @@ function generateMessageJSStructFromSpec(messageInfo, dir, spec) {
     '__' +
     spec.msgName +
     '.js';
+  // messageInfo.isServiceEvent = false;
 
   const generatedCode = removeEmptyLines(
     dots.message({
@@ -258,15 +296,19 @@ async function generateActionJSStruct(actionInfo, dir) {
 }
 
 async function generateJSStructFromIDL(pkg, dir) {
-  await Promise.all([
-    ...pkg.messages.map((messageInfo) =>
-      generateMessageJSStruct(messageInfo, dir)
-    ),
-    ...pkg.services.map((serviceInfo) =>
-      generateServiceJSStruct(serviceInfo, dir)
-    ),
-    ...pkg.actions.map((actionInfo) => generateActionJSStruct(actionInfo, dir)),
-  ]);
+  const results = [];
+  pkg.messages.forEach((messageInfo) => {
+    results.push(generateMessageJSStruct(messageInfo, dir));
+  });
+  pkg.services.forEach((serviceInfo) => {
+    results.push(
+      generateServiceJSStruct(serviceInfo, dir, /*isActionService=*/ false)
+    );
+  });
+  pkg.actions.forEach((actionInfo) => {
+    results.push(generateActionJSStruct(actionInfo, dir));
+  });
+  await Promise.all(results);
 }
 
 module.exports = generateJSStructFromIDL;

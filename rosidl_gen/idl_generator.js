@@ -61,6 +61,11 @@ async function generateServiceJSStruct(
     dots.service({ serviceInfo: serviceInfo })
   );
 
+  // We are going to only generate the service JavaScript file if it meets one
+  // of the followings:
+  // 1. It's a action's request/response service.
+  // 2. For pre-Humble ROS 2 releases, because it doesn't support service
+  //    introspection.
   if (
     isActionService ||
     DistroUtils.getDistroId() <= DistroUtils.getDistroId('humble')
@@ -89,7 +94,8 @@ async function generateServiceEventMsg(serviceInfo, dir) {
 async function generateServiceEventJSStruct(msgInfo, dir) {
   const spec = await parser.parseMessageFile(msgInfo.pkgName, msgInfo.filePath);
 
-  // We will remove the `.msg` files generated in `generateServiceEventMsg()`.
+  // Remove the `.msg` files generated in `generateServiceEventMsg()` to avoid
+  // being found later.
   fse.removeSync(msgInfo.filePath);
   const eventFileName =
     msgInfo.pkgName +
@@ -98,10 +104,13 @@ async function generateServiceEventJSStruct(msgInfo, dir) {
     '__' +
     msgInfo.interfaceName +
     '.js';
-  // Set `msgInfo.isServiceEvent` to true, so when requiring the
-  // Request/Response JavaScript files of the service, it will use "__srv__",
-  // e.g,
-  // require('../../generated/example_interfaces/example_interfaces__srv__AddTwoInts_Request.js');
+
+  // Set `msgInfo.isServiceEvent` to true, so when generating the JavaScript
+  // message files for the service event leveraging message.dot, it will use
+  // "__srv__" to require the JS files for the request/response of a specific
+  // service, e.g.,
+  // const AddTwoInts_RequestWrapper = require('../../generated/example_interfaces/example_interfaces__srv__AddTwoInts_Request.js');
+  // const AddTwoInts_ResponseWrapper = require('../../generated/example_interfaces/example_interfaces__srv__AddTwoInts_Response.js');
   msgInfo.isServiceEvent = true;
   const generatedCode = removeEmptyLines(
     dots.message({
@@ -131,7 +140,6 @@ function generateMessageJSStructFromSpec(messageInfo, dir, spec) {
     '__' +
     spec.msgName +
     '.js';
-  // messageInfo.isServiceEvent = false;
 
   const generatedCode = removeEmptyLines(
     dots.message({

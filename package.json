@@ -81,7 +81,8 @@
     "json-bigint": "^1.0.0",
     "nan": "^2.22.0",
     "terser": "^5.39.0",
-    "walk": "^2.3.15"
+    "walk": "^2.3.15",
+    "node-addon-api": "^5.0.0"
   },
   "husky": {
     "hooks": {

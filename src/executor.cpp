@@ -45,10 +45,10 @@ Executor::Executor(Napi::Env env, HandleManager* handle_manager,
                    Delegate* delegate)
     : async_(nullptr),
       main_thread_(uv_thread_self()),
-      env_(env),
       handle_manager_(handle_manager),
       delegate_(delegate),
-      context_(nullptr) {
+      context_(nullptr),
+      env_(env) {
   running_.store(false);
 }
 

@@ -1881,7 +1881,7 @@ Napi::Value PublishRawMessage(const Napi::CallbackInfo& info) {
   rcl_publisher_t* publisher = reinterpret_cast<rcl_publisher_t*>(
       RclHandle::Unwrap(info[0].As<Napi::Object>())->ptr());
 
-  auto object = info[1].As<Napi::Buffer<void>>();
+  auto object = info[1].As<Napi::Buffer<char*>>();
   rcl_serialized_message_t serialized_msg =
       rmw_get_zero_initialized_serialized_message();
   serialized_msg.buffer_capacity = object.Length();

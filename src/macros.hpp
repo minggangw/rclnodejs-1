@@ -36,7 +36,6 @@ inline void StoreEnv(Napi::Env current_env) { GetEnv() = current_env; }
       rcl_reset_error();                                            \
       Napi::Error::New(rclnodejs::GetEnv(), message)                \
           .ThrowAsJavaScriptException();                            \
-      return rclnodejs::GetEnv().Undefined();                       \
     }                                                               \
   }
 

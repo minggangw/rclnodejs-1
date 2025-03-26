@@ -15,6 +15,7 @@
 #include "rcl_bindings.hpp"
 
 #include <node.h>
+#include <node_buffer.h>
 #include <rcl/arguments.h>
 #include <rcl/error_handling.h>
 #include <rcl/expand_topic_name.h>
@@ -31,6 +32,8 @@
 #include <rmw/validate_full_topic_name.h>
 #include <rmw/validate_namespace.h>
 #include <rmw/validate_node_name.h>
+
+#include "v8.h"
 #if ROS_VERSION >= 2006
 #include <rosidl_runtime_c/string_functions.h>
 #else
@@ -959,9 +962,8 @@ Napi::Value SendRequest(const Napi::CallbackInfo& info) {
 
   rcl_client_t* client = reinterpret_cast<rcl_client_t*>(
       RclHandle::Unwrap(info[0].As<Napi::Object>())->ptr());
-  void* buffer = info[1].As<Napi::Buffer<void>>().Data();
+  char* buffer = info[1].As<Napi::Buffer<char>>().Data();
   int64_t sequence_number;
-
   THROW_ERROR_IF_NOT_EQUAL(rcl_send_request(client, buffer, &sequence_number),
                            RCL_RET_OK, rcl_get_error_string().str);
 
@@ -1881,11 +1883,16 @@ Napi::Value PublishRawMessage(const Napi::CallbackInfo& info) {
   rcl_publisher_t* publisher = reinterpret_cast<rcl_publisher_t*>(
       RclHandle::Unwrap(info[0].As<Napi::Object>())->ptr());
 
-  auto object = info[1].As<Napi::Buffer<char*>>();
+  // auto object = (info[1].As<v8::Object>()).ToLocalChecked();
+  auto object = info[1].As<Napi::Buffer<char>>();
+  // v8::Local<v8::Object> object = napiBuffer;
   rcl_serialized_message_t serialized_msg =
       rmw_get_zero_initialized_serialized_message();
+  // serialized_msg.buffer_capacity = node::Buffer::Length(object);;
   serialized_msg.buffer_capacity = object.Length();
   serialized_msg.buffer_length = serialized_msg.buffer_capacity;
+  // serialized_msg.buffer =
+  // reinterpret_cast<uint8_t*>(node::Buffer::Data(object));
   serialized_msg.buffer = reinterpret_cast<uint8_t*>(object.Data());
 
   THROW_ERROR_IF_NOT_EQUAL(

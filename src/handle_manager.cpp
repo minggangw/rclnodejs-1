@@ -300,15 +300,24 @@ rcl_ret_t HandleManager::CollectReadyActionHandles(
     if (ret != RCL_RET_OK) {
       return ret;
     }
-
-    action_client->SetBoolProperty("isFeedbackReady", is_feedback_ready);
-    action_client->SetBoolProperty("isStatusReady", is_status_ready);
-    action_client->SetBoolProperty("isGoalResponseReady",
-                                   is_goal_response_ready);
-    action_client->SetBoolProperty("isCancelResponseReady",
-                                   is_cancel_response_ready);
-    action_client->SetBoolProperty("isResultResponseReady",
-                                   is_result_response_ready);
+    if (is_feedback_ready) {
+      action_client->SetBoolProperty("isFeedbackReady", is_feedback_ready);
+    }
+    if (is_status_ready) {
+      action_client->SetBoolProperty("isStatusReady", is_status_ready);
+    }
+    if (is_goal_response_ready) {
+      action_client->SetBoolProperty("isGoalResponseReady",
+                                     is_goal_response_ready);
+    }
+    if (is_cancel_response_ready) {
+      action_client->SetBoolProperty("isCancelResponseReady",
+                                     is_cancel_response_ready);
+    }
+    if (is_result_response_ready) {
+      action_client->SetBoolProperty("isResultResponseReady",
+                                     is_result_response_ready);
+    }
 
     if (is_feedback_ready || is_status_ready || is_goal_response_ready ||
         is_cancel_response_ready || is_result_response_ready) {
@@ -330,13 +339,21 @@ rcl_ret_t HandleManager::CollectReadyActionHandles(
     if (ret != RCL_RET_OK) {
       return ret;
     }
-
-    action_server->SetBoolProperty("isGoalRequestReady", is_goal_request_ready);
-    action_server->SetBoolProperty("isCancelRequestReady",
-                                   is_cancel_request_ready);
-    action_server->SetBoolProperty("isResultRequestReady",
-                                   is_result_request_ready);
-    action_server->SetBoolProperty("isGoalExpired", is_goal_expired);
+    if (is_goal_request_ready) {
+      action_server->SetBoolProperty("isGoalRequestReady",
+                                     is_goal_request_ready);
+    }
+    if (is_cancel_request_ready) {
+      action_server->SetBoolProperty("isCancelRequestReady",
+                                     is_cancel_request_ready);
+    }
+    if (is_result_request_ready) {
+      action_server->SetBoolProperty("isResultRequestReady",
+                                     is_result_request_ready);
+    }
+    if (is_goal_expired) {
+      action_server->SetBoolProperty("isGoalExpired", is_goal_expired);
+    }
 
     if (is_goal_request_ready || is_cancel_request_ready ||
         is_result_request_ready || is_goal_expired) {

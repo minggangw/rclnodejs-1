@@ -8,11 +8,13 @@ Builds on 2.1.0's native ESM and the `rclnodejs/web` HTTP transport from 2.0.0: 
 
 ```bash
 # Terminal 1
+# source /opt/ros/<distro>/setup.bash
 ros2 run demo_nodes_cpp talker  # publishes /chatter
 ```
 
 ```bash
 # Terminal 2
+# source /opt/ros/<distro>/setup.bash
 npx -p rclnodejs rclnodejs-web --port 9000 --http-port 9001 \
   --http-sse --http-cors '*' --subscribe /chatter=std_msgs/msg/String
 ```

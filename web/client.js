@@ -97,6 +97,7 @@ class _WsLink {
     this._ws = null;
     this._pending = new Map();
     this._subs = new Map();
+    this._goals = new Map(); // goal id -> { onFeedback, resolveResult, rejectResult }
     this._closed = false;
     this._isUserClosed = false;
     this._isReconnecting = false;
@@ -218,6 +219,48 @@ class _WsLink {
   publish(capability, payload) {
     return this._request({ kind: 'publish', capability, payload });
   }
+  action(capability, payload, { onFeedback } = {}) {
+    if (this._isReconnecting) {
+      return Promise.reject(_connectionLostError());
+    }
+    const id = _genId();
+    // Registered synchronously, before the frame is even sent: feedback is
+    // delivered over a separate topic subscription from the goal-accept
+    // service response, so a feedback frame can race ahead of the accept
+    // ack. If _goals isn't populated yet when that happens, the feedback
+    // is silently dropped (no id to route it to).
+    let resolveResult, rejectResult;
+    const result = new Promise((res, rej) => {
+      resolveResult = res;
+      rejectResult = rej;
+    });
+    this._goals.set(id, { onFeedback, resolveResult, rejectResult });
+    return new Promise((resolve, reject) => {
+      this._pending.set(id, {
+        resolve: () => {
+          resolve({
+            goalId: id,
+            result,
+            cancel: () => this._cancelGoal(id),
+          });
+        },
+        reject: (err) => {
+          this._goals.delete(id); // goal was never accepted; nothing to route to
+          reject(err);
+        },
+      });
+      this._sendRaw({
+        id,
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload,
+      });
+    });
+  }
+  _cancelGoal(goalId) {
+    return this._request({ kind: 'action', op: 'cancel', goalId });
+  }
   subscribe(capability, callback) {
     if (this._isReconnecting) {
       return Promise.reject(_connectionLostError());
@@ -333,6 +376,33 @@ class _WsLink {
       }
       return;
     }
+    if (frame.event === 'feedback') {
+      const goal = this._goals.get(frame.goalId);
+      if (goal && goal.onFeedback) {
+        try {
+          goal.onFeedback(frame.payload);
+        } catch (_) {
+          // user callback errors don't break the dispatch loop
+        }
+      }
+      return;
+    }
+    if (frame.event === 'result') {
+      const goal = this._goals.get(frame.goalId);
+      this._goals.delete(frame.goalId);
+      if (goal) {
+        if (frame.ok === false) {
+          goal.rejectResult(
+            Object.assign(new Error(frame.error || 'action failed'), {
+              code: frame.code,
+            })
+          );
+        } else {
+          goal.resolveResult(frame.payload);
+        }
+      }
+      return;
+    }
     const pend = this._pending.get(frame.id);
     if (!pend) return;
     this._pending.delete(frame.id);
@@ -351,6 +421,10 @@ class _WsLink {
       p.reject(cause);
     }
     this._pending.clear();
+    for (const goal of this._goals.values()) {
+      goal.rejectResult(cause);
+    }
+    this._goals.clear();
   }
 }
 
@@ -640,6 +714,20 @@ export class RosClient {
     }
     const ws = await this._ensureWs();
     return ws.subscribe(capability, callback);
+  }
+
+  /**
+   * Send an action goal. Returns `{ goalId, result, cancel() }` where
+   * `result` is a Promise resolving with the action result, and `cancel()`
+   * requests cancellation over WebSocket.
+   * @param {string} capability
+   * @param {*} payload The goal.
+   * @param {object} [options]
+   * @param {(feedback: *) => void} [options.onFeedback]
+   */
+  async action(capability, payload, options) {
+    const ws = await this._ensureWs();
+    return ws.action(capability, payload, options);
   }
 }
 

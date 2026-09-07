@@ -596,6 +596,7 @@ export class RosClient {
    */
   constructor(url, options = {}) {
     this.options = options;
+    this._closed = false;
     this._listeners = new Map(); // event name -> Set<handler>
     const { httpUrl, wsUrl, wsExplicit } = _resolveUrls(url);
     this.url = httpUrl || wsUrl;
@@ -652,6 +653,7 @@ export class RosClient {
 
   /** Open the link(s). */
   async connect() {
+    if (this._closed) throw new Error('connection closed');
     // Open HTTP eagerly (it's a no-op anyway). Defer the WebSocket
     // open until the user actually calls subscribe() — that way an
     // HTTP-only deployment with no WS sibling works for call/publish
@@ -663,6 +665,7 @@ export class RosClient {
 
   /** Close the underlying link(s). */
   async close() {
+    this._closed = true;
     const tasks = [];
     if (this._http) tasks.push(this._http.close());
     if (this._wsConnect) {
@@ -686,6 +689,7 @@ export class RosClient {
    * structured error if no WS URL is available or the open fails.
    */
   async _ensureWs() {
+    if (this._closed) throw new Error('connection closed');
     if (!this._wsUrl) {
       throw Object.assign(
         new Error(
@@ -748,8 +752,14 @@ export class RosClient {
    * @param {(feedback: *) => void} [options.onFeedback]
    */
   async action(capability, payload, options) {
+    const { onFeedback } = options ?? {};
+    if (onFeedback !== undefined && typeof onFeedback !== 'function') {
+      throw new TypeError(
+        'action(capability, payload, options): onFeedback must be a function'
+      );
+    }
     const ws = await this._ensureWs();
-    return ws.action(capability, payload, options);
+    return ws.action(capability, payload, { onFeedback });
   }
 }
 

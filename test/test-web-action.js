@@ -288,6 +288,79 @@ describe('Action capability dispatch', function () {
       }
     });
 
+    it('rejects invalid feedback callbacks before opening the lazy WebSocket', async function () {
+      const httpUrl = new URL(wsUrl);
+      httpUrl.protocol = 'http:';
+      httpUrl.pathname = '/';
+      const ros = await connect(httpUrl.href);
+      try {
+        for (const onFeedback of [null, false, 0, 1, 'feedback', {}, []]) {
+          await assert.rejects(
+            ros.action('/fibonacci', { order: 5 }, { onFeedback }),
+            {
+              name: 'TypeError',
+              message:
+                'action(capability, payload, options): onFeedback must be a function',
+            }
+          );
+          assert.strictEqual(ros._ws, null);
+          assert.strictEqual(ros._wsConnect, null);
+        }
+      } finally {
+        await ros.close();
+      }
+    });
+
+    it('isolates errors thrown by valid feedback callbacks', async function () {
+      const ros = await connect(wsUrl);
+      let feedbackCount = 0;
+      try {
+        const goal = await ros.action(
+          '/fibonacci',
+          { order: 5 },
+          {
+            onFeedback() {
+              feedbackCount++;
+              throw new Error('feedback callback failed');
+            },
+          }
+        );
+        assert.deepStrictEqual(await goal.result, { sequence: [1, 1, 2, 3] });
+        assert.strictEqual(goal.status, 'succeeded');
+        assert.strictEqual(feedbackCount, 1);
+      } finally {
+        await ros.close();
+      }
+    });
+
+    it('does not open the lazy WebSocket during or after client close', async function () {
+      const httpUrl = new URL(wsUrl);
+      httpUrl.protocol = 'http:';
+      httpUrl.pathname = '/';
+      const ros = await connect(httpUrl.href);
+      const closing = ros.close();
+      try {
+        await assert.rejects(
+          ros.action('/fibonacci', { order: 5 }),
+          /connection closed/
+        );
+        await closing;
+        await assert.rejects(
+          ros.action('/fibonacci', { order: 5 }),
+          /connection closed/
+        );
+        await assert.rejects(
+          ros.subscribe('/feedback', () => {}),
+          /connection closed/
+        );
+        await assert.rejects(ros.connect(), /connection closed/);
+        assert.strictEqual(ros._ws, null);
+        assert.strictEqual(ros._wsConnect, null);
+      } finally {
+        await ros.close();
+      }
+    });
+
     it('rejects actions during and after WebSocket close without tracking goals', async function () {
       const ros = await connect(wsUrl);
       const closing = ros.close();

@@ -7,6 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 import assert from 'assert';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import sinon from 'sinon';
 import WebSocket from 'ws';
 import rclnodejs from '../index.js';
@@ -15,6 +16,8 @@ import ClientGoalHandle from '../lib/action/client_goal_handle.js';
 import {
   createRuntime,
   CapabilityRegistry,
+  Connection,
+  Dispatcher,
   WebSocketTransport,
 } from '../lib/runtime/index.js';
 import * as assertUtils from './utils.js';
@@ -68,6 +71,265 @@ describe('CapabilityRegistry (unit)', function () {
       () => reg.expose({ call: { '/x': null } }),
       /string or { type: string }/
     );
+  });
+});
+
+describe('Dispatcher action cleanup', function () {
+  let node;
+  let sandbox;
+  let clock;
+  let connection;
+  let sendGoal;
+  let destroy;
+  const capability = '/cleanup_fibonacci';
+
+  before(async function () {
+    await rclnodejs.init();
+  });
+
+  after(function () {
+    rclnodejs.shutdown();
+  });
+
+  beforeEach(function () {
+    node = rclnodejs.createNode('runtime_cleanup_test_node');
+    sandbox = sinon.createSandbox();
+    clock = sandbox.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout'],
+    });
+    sandbox
+      .stub(ActionClient.prototype, 'isActionServerAvailable')
+      .returns(true);
+    sendGoal = sandbox.stub(ActionClient.prototype, 'sendGoal');
+    destroy = sandbox.spy(ActionClient.prototype, 'destroy');
+    connection = new Connection();
+    connection.send = sandbox.spy();
+    const registry = new CapabilityRegistry().expose({
+      action: { [capability]: 'example_interfaces/action/Fibonacci' },
+    });
+    new Dispatcher({ node, registry }).handle(connection);
+  });
+
+  afterEach(function () {
+    sandbox.restore();
+    node.destroy();
+  });
+
+  for (const phase of ['goal', 'result', 'cancel']) {
+    it(`bounds disconnected clients with a missing ${phase} response`, async function () {
+      let resolveGoal;
+      let resolveResult;
+      let resolveCancel;
+      const goalResponse = new Promise((resolve) => (resolveGoal = resolve));
+      const resultResponse = new Promise(
+        (resolve) => (resolveResult = resolve)
+      );
+      const cancelResponse = new Promise(
+        (resolve) => (resolveCancel = resolve)
+      );
+      const handle = {
+        isAccepted: () => true,
+        getResult: sandbox.stub().returns(resultResponse),
+        cancelGoal: sandbox.stub().returns(cancelResponse),
+        status: 4,
+      };
+      sendGoal.returns(goalResponse);
+      connection.emit('message', {
+        id: 'goal',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: {},
+      });
+      if (phase !== 'goal') {
+        resolveGoal(handle);
+        await nextTurn();
+      }
+      if (phase === 'cancel') {
+        connection.emit('message', {
+          id: 'cancel',
+          kind: 'action',
+          op: 'cancel',
+          goalId: 'goal',
+        });
+        resolveResult({});
+        await nextTurn();
+      }
+      connection.emit('close');
+      await clock.tickAsync(29999);
+      assert.strictEqual(node._actionClients.length, 1);
+      assert.ok(destroy.notCalled);
+      connection.emit('close');
+      connection.emit('message', {
+        id: 'after-close',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: {},
+      });
+      assert.ok(sendGoal.calledOnce);
+      await clock.tickAsync(1);
+      await nextTurn();
+      assert.strictEqual(node._actionClients.length, 0);
+      assert.ok(destroy.calledOnce);
+      resolveGoal(handle);
+      resolveResult({});
+      resolveCancel({ goals_canceling: [{}] });
+      await nextTurn();
+      await nextTurn();
+      if (phase === 'goal') assert.ok(handle.getResult.notCalled);
+      assert.strictEqual(node._actionClients.length, 0);
+      assert.ok(destroy.calledOnce);
+      assert.strictEqual(clock.countTimers(), 0);
+    });
+  }
+
+  it('ignores feedback from completed goals when their wire ID is reused', async function () {
+    const feedbackCallbacks = [];
+    const results = [];
+    sendGoal.callsFake((goal, feedback) => {
+      feedbackCallbacks.push(feedback);
+      return Promise.resolve({
+        isAccepted: () => true,
+        status: 4,
+        getResult: () => new Promise((resolve) => results.push(resolve)),
+      });
+    });
+    const frame = {
+      id: 'reused',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    };
+    connection.emit('message', frame);
+    await nextTurn();
+    results[0]({});
+    await nextTurn();
+    connection.emit('message', frame);
+    await nextTurn();
+    connection.send.resetHistory();
+    feedbackCallbacks[0]({ sequence: [99] });
+    assert.ok(connection.send.notCalled);
+    feedbackCallbacks[1]({ sequence: [2] });
+    assert.deepStrictEqual(connection.send.lastCall.args[0], {
+      event: 'feedback',
+      goalId: 'reused',
+      payload: { sequence: [2] },
+    });
+    results[1]({});
+    await nextTurn();
+    connection.send.resetHistory();
+    feedbackCallbacks[1]({ sequence: [99] });
+    assert.ok(connection.send.notCalled);
+    connection.emit('close');
+    await nextTurn();
+    await nextTurn();
+  });
+
+  it('suppresses feedback after a synchronous result-setup failure', async function () {
+    sendGoal.resolves({
+      isAccepted: () => true,
+      getResult: sandbox.stub().throws(new Error('result setup failed')),
+    });
+    connection.emit('message', {
+      id: 'failed',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    });
+    await nextTurn();
+    assert.strictEqual(connection.send.lastCall.args[0].code, 'action_failed');
+    connection.send.resetHistory();
+    sendGoal.firstCall.args[1]({ sequence: [99] });
+    assert.ok(connection.send.notCalled);
+    connection.emit('close');
+    await nextTurn();
+    await nextTurn();
+  });
+
+  it('handles a real result after the disconnected client expires', async function () {
+    sendGoal.callThrough();
+    const actionType = 'example_interfaces/action/Fibonacci';
+    const Fibonacci = rclnodejs.require(actionType);
+    let finishExecution;
+    const execution = new Promise((resolve) => (finishExecution = resolve));
+    const server = new rclnodejs.ActionServer(
+      node,
+      actionType,
+      capability,
+      async (goalHandle) => {
+        await execution;
+        goalHandle.succeed();
+        return new Fibonacci.Result();
+      }
+    );
+    let requestTaken;
+    const requested = new Promise((resolve) => (requestTaken = resolve));
+    const executeRequest = server._executeGetResultRequest;
+    sandbox.stub(server, '_executeGetResultRequest').callsFake(function (
+      ...args
+    ) {
+      executeRequest.apply(this, args);
+      requestTaken();
+    });
+    let replySent;
+    let replyFailed;
+    const responded = new Promise((resolve, reject) => {
+      replySent = resolve;
+      replyFailed = reject;
+    });
+    const sendResponse = server._sendResultResponse;
+    sandbox.stub(server, '_sendResultResponse').callsFake(function (...args) {
+      try {
+        sendResponse.apply(this, args);
+        replySent();
+      } catch (error) {
+        replyFailed(error);
+      }
+    });
+    rclnodejs.spin(node);
+    try {
+      connection.emit('message', {
+        id: 'late-result',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: { order: 1 },
+      });
+      await requested;
+      connection.emit('close');
+      await clock.tickAsync(30000);
+      await nextTurn();
+      assert.strictEqual(node._actionClients.length, 0);
+      finishExecution();
+      await responded;
+      assert.ok(destroy.calledOnce);
+    } finally {
+      server.destroy();
+    }
+  });
+
+  it('clears the drain timer when the pending goal finishes normally', async function () {
+    let resolveGoal;
+    sendGoal.returns(new Promise((resolve) => (resolveGoal = resolve)));
+    connection.emit('message', {
+      id: 'goal',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    });
+    connection.emit('close');
+    await clock.tickAsync(1000);
+    assert.ok(destroy.notCalled);
+    resolveGoal({ isAccepted: () => false });
+    await nextTurn();
+    await nextTurn();
+    assert.ok(destroy.calledOnce);
+    assert.strictEqual(node._actionClients.length, 0);
+    assert.strictEqual(clock.countTimers(), 0);
   });
 });
 

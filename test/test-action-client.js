@@ -192,6 +192,45 @@ describe('rclnodejs action client', function () {
     client.destroy();
   });
 
+  it('releases feedback callbacks after results on a reused client', async function () {
+    const client = new rclnodejs.ActionClient(node, fibonacci, 'fibonacci');
+    try {
+      assert.ok(await client.waitForServer(2000));
+      for (let index = 0; index < 3; index++) {
+        const feedback = sinon.spy();
+        const goalHandle = await client.sendGoal(
+          new Fibonacci.Goal(),
+          feedback
+        );
+        await goalHandle.getResult();
+        assert.strictEqual(client._feedbackCallbacks.size, 0);
+        client.processFeedbackMessage({
+          goal_id: goalHandle.goalId,
+          toPlainObject: () => ({ feedback: {} }),
+        });
+        assert.ok(feedback.notCalled);
+      }
+    } finally {
+      client.destroy();
+    }
+  });
+
+  it('clears pending requests and feedback when destroyed', function () {
+    const client = new rclnodejs.ActionClient(node, fibonacci, 'fibonacci');
+    const maps = [
+      client._goalHandles,
+      client._feedbackCallbacks,
+      client._sequenceNumberGoalIdMap,
+      client._pendingGoalRequests,
+      client._pendingResultRequests,
+      client._pendingCancelRequests,
+    ];
+    for (const entries of maps) entries.set('pending', {});
+    client.destroy();
+    for (const entries of maps) assert.strictEqual(entries.size, 0);
+    assert.ok(client.isDestroyed());
+  });
+
   it('Test send goal with feedback for another goal', async function () {
     let client = new rclnodejs.ActionClient(node, fibonacci, 'fibonacci');
 

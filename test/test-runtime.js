@@ -227,27 +227,56 @@ describe('Dispatcher action cleanup', function () {
     await nextTurn();
   });
 
-  it('suppresses feedback after a synchronous result-setup failure', async function () {
-    sendGoal.resolves({
-      isAccepted: () => true,
-      getResult: sandbox.stub().throws(new Error('result setup failed')),
+  for (const failureMode of ['throws', 'rejects']) {
+    it(`releases feedback callbacks when getResult ${failureMode}`, async function () {
+      sendGoal.callThrough();
+      sandbox
+        .stub(ClientGoalHandle.prototype, 'getResult')
+        [failureMode](new Error('result setup failed'));
+      const actionType = 'example_interfaces/action/Fibonacci';
+      const Fibonacci = rclnodejs.require(actionType);
+      const server = new rclnodejs.ActionServer(
+        node,
+        actionType,
+        capability,
+        (goalHandle) => {
+          goalHandle.succeed();
+          return new Fibonacci.Result();
+        }
+      );
+      rclnodejs.spin(node);
+      try {
+        for (let index = 0; index < 3; index++) {
+          connection.emit('message', {
+            id: 'failed',
+            kind: 'action',
+            op: 'send_goal',
+            capability,
+            payload: { order: 1 },
+          });
+          await sendGoal.lastCall.returnValue;
+          await nextTurn();
+          assert.deepStrictEqual(connection.send.lastCall.args[0], {
+            event: 'result',
+            goalId: 'failed',
+            ok: false,
+            error: 'get result failed: result setup failed',
+            code: 'action_failed',
+          });
+          assert.strictEqual(node._actionClients.length, 1);
+          assert.strictEqual(node._actionClients[0]._feedbackCallbacks.size, 0);
+          connection.send.resetHistory();
+          sendGoal.lastCall.args[1]({ sequence: [99] });
+          assert.ok(connection.send.notCalled);
+        }
+      } finally {
+        connection.emit('close');
+        await nextTurn();
+        await nextTurn();
+        server.destroy();
+      }
     });
-    connection.emit('message', {
-      id: 'failed',
-      kind: 'action',
-      op: 'send_goal',
-      capability,
-      payload: {},
-    });
-    await nextTurn();
-    assert.strictEqual(connection.send.lastCall.args[0].code, 'action_failed');
-    connection.send.resetHistory();
-    sendGoal.firstCall.args[1]({ sequence: [99] });
-    assert.ok(connection.send.notCalled);
-    connection.emit('close');
-    await nextTurn();
-    await nextTurn();
-  });
+  }
 
   it('handles a real result after the disconnected client expires', async function () {
     sendGoal.callThrough();

@@ -1,7 +1,9 @@
 /// <reference path='../../types/index.d.ts' />
+/// <reference path='../../web/index.d.ts' />
 
-import { expectType, expectAssignable } from 'tsd';
+import { expectType, expectAssignable, expectError } from 'tsd';
 import * as rclnodejs from 'rclnodejs';
+import type { ActionHandle, ActionStatus } from 'rclnodejs/web';
 import { ChildProcess } from 'child_process';
 import { Observable } from 'rxjs';
 
@@ -12,6 +14,16 @@ const TOPIC = 'topic';
 const SERVICE_NAME = 'service';
 const MSG = rclnodejs.createMessageObject(TYPE_CLASS);
 MSG.data = '';
+
+declare const webAction: ActionHandle<{ sequence: number[] }>;
+expectType<Promise<{ sequence: number[] }>>(webAction.result);
+expectType<ActionStatus | undefined>(webAction.status);
+expectAssignable<ActionStatus>('succeeded');
+expectAssignable<ActionStatus>('canceled');
+expectAssignable<ActionStatus>('aborted');
+expectAssignable<ActionStatus>('unknown');
+expectError((webAction.status = 'succeeded'));
+expectType<Promise<void>>(webAction.cancel());
 
 // ---- rclnodejs -----
 expectType<Promise<void>>(rclnodejs.init());

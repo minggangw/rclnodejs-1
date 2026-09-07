@@ -127,14 +127,20 @@ declare module 'rclnodejs/web' {
     close(): Promise<void>;
   }
 
+  export type ActionStatus = 'succeeded' | 'canceled' | 'aborted' | 'unknown';
+
   /**
    * Handle for an in-flight action goal, returned by {@link RosClient.action}.
    *
    * `cancel()` requests cancellation of the goal over WebSocket.
+   * `result` resolves with the ROS payload even when canceled or aborted;
+   * inspect `status` after awaiting it to determine the outcome.
    */
   export interface ActionHandle<TResult = unknown> {
     readonly goalId: string;
     readonly result: Promise<TResult>;
+    /** Undefined until a terminal response; missing/unrecognized status is 'unknown'. */
+    readonly status: ActionStatus | undefined;
     cancel(): Promise<void>;
   }
 

@@ -220,6 +220,9 @@ class _WsLink {
     return this._request({ kind: 'publish', capability, payload });
   }
   action(capability, payload, { onFeedback } = {}) {
+    if (this._closed || this._isUserClosed) {
+      return Promise.reject(new Error('connection closed'));
+    }
     if (this._isReconnecting) {
       return Promise.reject(_connectionLostError());
     }
@@ -234,13 +237,24 @@ class _WsLink {
       resolveResult = res;
       rejectResult = rej;
     });
-    this._goals.set(id, { onFeedback, resolveResult, rejectResult });
+    let status;
+    this._goals.set(id, {
+      onFeedback,
+      resolveResult,
+      rejectResult,
+      setStatus(value) {
+        status = value;
+      },
+    });
     return new Promise((resolve, reject) => {
       this._pending.set(id, {
         resolve: () => {
           resolve({
             goalId: id,
             result,
+            get status() {
+              return status;
+            },
             cancel: () => this._cancelGoal(id),
           });
         },
@@ -391,6 +405,11 @@ class _WsLink {
       const goal = this._goals.get(frame.goalId);
       this._goals.delete(frame.goalId);
       if (goal) {
+        goal.setStatus(
+          ['succeeded', 'canceled', 'aborted'].includes(frame.status)
+            ? frame.status
+            : 'unknown'
+        );
         if (frame.ok === false) {
           goal.rejectResult(
             Object.assign(new Error(frame.error || 'action failed'), {
@@ -717,9 +736,11 @@ export class RosClient {
   }
 
   /**
-   * Send an action goal. Returns `{ goalId, result, cancel() }` where
+   * Send an action goal. Returns `{ goalId, result, status, cancel() }` where
    * `result` is a Promise resolving with the action result, and `cancel()`
    * requests cancellation over WebSocket.
+   * Read `status` after awaiting `result` to distinguish success, cancellation,
+   * and abortion without changing the result payload.
    * @param {string} capability
    * @param {*} payload The goal.
    * @param {object} [options]

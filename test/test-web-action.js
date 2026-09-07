@@ -10,7 +10,8 @@
 // test-runtime.js) plus SDK-level (`rclnodejs/web`) WebSocket round-trips.
 
 import assert from 'assert';
-import WebSocket from 'ws';
+import { once } from 'node:events';
+import WebSocket, { WebSocketServer } from 'ws';
 import rclnodejs from '../index.js';
 import { createRuntime, WebSocketTransport } from '../lib/runtime/index.js';
 import * as assertUtils from './utils.js';
@@ -266,10 +267,31 @@ describe('Action capability dispatch', function () {
         );
         const result = await goal.result;
         assert.deepStrictEqual(result.sequence, [1, 1, 2, 3]);
+        assert.strictEqual(goal.status, 'succeeded');
         assert.strictEqual(feedbacks.length, 1);
         assert.deepStrictEqual(feedbacks[0].sequence, [1, 1]);
       } finally {
         await ros.close();
+      }
+    });
+
+    it('rejects actions during and after WebSocket close without tracking goals', async function () {
+      const ros = await connect(wsUrl);
+      const closing = ros.close();
+      try {
+        await assert.rejects(
+          ros.action('/fibonacci', { order: 5 }),
+          /connection closed/
+        );
+        await closing;
+        await assert.rejects(
+          ros.action('/fibonacci', { order: 5 }),
+          /connection closed/
+        );
+        assert.strictEqual(ros._ws._pending.size, 0);
+        assert.strictEqual(ros._ws._goals.size, 0);
+      } finally {
+        await closing;
       }
     });
 
@@ -281,8 +303,103 @@ describe('Action capability dispatch', function () {
         await goal.cancel();
         const result = await goal.result;
         assert.deepStrictEqual(result, { sequence: [] });
+        assert.strictEqual(goal.status, 'canceled');
       } finally {
         await ros.close();
+      }
+    });
+
+    for (const { name, terminal, errorCode } of [
+      { name: 'missing status', terminal: { payload: {} } },
+      { name: 'unknown status', terminal: { status: 'unknown', payload: {} } },
+      {
+        name: 'invalid status',
+        terminal: { status: 'executing', payload: {} },
+      },
+      {
+        name: 'result error',
+        terminal: { ok: false, code: 'action_failed', error: 'result failed' },
+        errorCode: 'action_failed',
+      },
+      {
+        name: 'connection loss before a result',
+        terminal: null,
+        errorCode: 'connection_lost',
+      },
+    ]) {
+      it(`does not infer a terminal status from ${name}`, async function () {
+        const wireServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+        wireServer.on('connection', (socket) => {
+          socket.on('message', (data) => {
+            const { id } = JSON.parse(data.toString());
+            socket.send(
+              JSON.stringify({ id, ok: true, payload: { accepted: true } })
+            );
+            if (terminal === null) {
+              socket.close();
+            } else {
+              socket.send(
+                JSON.stringify({ event: 'result', goalId: id, ...terminal })
+              );
+            }
+          });
+        });
+        await once(wireServer, 'listening');
+        let ros;
+        try {
+          ros = await connect(
+            `ws://127.0.0.1:${wireServer.address().port}/capability`
+          );
+          const goal = await ros.action('/fibonacci', { order: 5 });
+          if (errorCode) {
+            await assert.rejects(
+              goal.result,
+              (error) => error.code === errorCode
+            );
+          } else {
+            assert.deepStrictEqual(await goal.result, {});
+          }
+          assert.strictEqual(
+            goal.status,
+            terminal === null ? undefined : 'unknown'
+          );
+          assert.strictEqual(ros._ws._goals.size, 0);
+        } finally {
+          if (ros) await ros.close();
+          await new Promise((resolve) => wireServer.close(resolve));
+        }
+      });
+    }
+
+    it('exposes an aborted status without changing the result payload', async function () {
+      const capability = '/fibonacci_abort';
+      let finishExecution;
+      const execution = new Promise((resolve) => (finishExecution = resolve));
+      const actionServer = new rclnodejs.ActionServer(
+        node,
+        fibonacci,
+        capability,
+        async (goalHandle) => {
+          await execution;
+          goalHandle.abort();
+          return new Fibonacci.Result();
+        }
+      );
+      runtime.expose({ action: { [capability]: fibonacci } });
+      const ros = await connect(wsUrl);
+      try {
+        const goal = await ros.action(capability, { order: 5 });
+        assert.strictEqual(goal.status, undefined);
+        finishExecution();
+        assert.deepStrictEqual(await goal.result, { sequence: [] });
+        assert.strictEqual(goal.status, 'aborted');
+        assert.throws(() => {
+          goal.status = 'succeeded';
+        }, TypeError);
+      } finally {
+        finishExecution();
+        await ros.close();
+        actionServer.destroy();
       }
     });
   });

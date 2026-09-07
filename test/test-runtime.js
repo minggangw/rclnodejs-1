@@ -7,13 +7,20 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 import assert from 'assert';
+import { setImmediate as nextTurn } from 'node:timers/promises';
+import sinon from 'sinon';
 import WebSocket from 'ws';
 import rclnodejs from '../index.js';
+import ActionClient from '../lib/action/client.js';
+import ClientGoalHandle from '../lib/action/client_goal_handle.js';
 import {
   createRuntime,
   CapabilityRegistry,
+  Connection,
+  Dispatcher,
   WebSocketTransport,
 } from '../lib/runtime/index.js';
+import * as assertUtils from './utils.js';
 
 describe('CapabilityRegistry (unit)', function () {
   it('expose() registers shorthand and rich forms', function () {
@@ -22,22 +29,30 @@ describe('CapabilityRegistry (unit)', function () {
       call: { '/add': 'example_interfaces/srv/AddTwoInts' },
       publish: { '/chatter': { type: 'std_msgs/msg/String' } },
       subscribe: { '/scan': 'sensor_msgs/msg/LaserScan' },
+      action: { '/fibonacci': 'example_interfaces/action/Fibonacci' },
     });
     assert.deepStrictEqual(reg.list(), {
       call: { '/add': 'example_interfaces/srv/AddTwoInts' },
       publish: { '/chatter': 'std_msgs/msg/String' },
       subscribe: { '/scan': 'sensor_msgs/msg/LaserScan' },
+      action: { '/fibonacci': 'example_interfaces/action/Fibonacci' },
     });
   });
 
   it('resolve() returns the matching capability or null', function () {
     const reg = new CapabilityRegistry().expose({
       call: { '/add': 'example_interfaces/srv/AddTwoInts' },
+      action: { '/fibonacci': 'example_interfaces/action/Fibonacci' },
     });
     assert.deepStrictEqual(reg.resolve('call', '/add'), {
       kind: 'call',
       name: '/add',
       type: 'example_interfaces/srv/AddTwoInts',
+    });
+    assert.deepStrictEqual(reg.resolve('action', '/fibonacci'), {
+      kind: 'action',
+      name: '/fibonacci',
+      type: 'example_interfaces/action/Fibonacci',
     });
     assert.strictEqual(reg.resolve('call', '/missing'), null);
     assert.strictEqual(reg.resolve('publish', '/add'), null);
@@ -59,16 +74,457 @@ describe('CapabilityRegistry (unit)', function () {
   });
 });
 
+describe('Dispatcher action cleanup', function () {
+  let node;
+  let sandbox;
+  let clock;
+  let connection;
+  let sendGoal;
+  let destroy;
+  const capability = '/cleanup_fibonacci';
+
+  before(async function () {
+    await rclnodejs.init();
+  });
+
+  after(function () {
+    rclnodejs.shutdown();
+  });
+
+  beforeEach(function () {
+    node = rclnodejs.createNode('runtime_cleanup_test_node');
+    sandbox = sinon.createSandbox();
+    clock = sandbox.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout'],
+    });
+    sandbox
+      .stub(ActionClient.prototype, 'isActionServerAvailable')
+      .returns(true);
+    sendGoal = sandbox.stub(ActionClient.prototype, 'sendGoal');
+    destroy = sandbox.spy(ActionClient.prototype, 'destroy');
+    connection = new Connection();
+    connection.send = sandbox.spy();
+    const registry = new CapabilityRegistry().expose({
+      action: { [capability]: 'example_interfaces/action/Fibonacci' },
+    });
+    new Dispatcher({ node, registry }).handle(connection);
+  });
+
+  afterEach(function () {
+    sandbox.restore();
+    node.destroy();
+  });
+
+  for (const phase of ['goal', 'result', 'cancel']) {
+    it(`bounds disconnected clients with a missing ${phase} response`, async function () {
+      let resolveGoal;
+      let resolveResult;
+      let resolveCancel;
+      const goalResponse = new Promise((resolve) => (resolveGoal = resolve));
+      const resultResponse = new Promise(
+        (resolve) => (resolveResult = resolve)
+      );
+      const cancelResponse = new Promise(
+        (resolve) => (resolveCancel = resolve)
+      );
+      const handle = {
+        isAccepted: () => true,
+        getResult: sandbox.stub().returns(resultResponse),
+        cancelGoal: sandbox.stub().returns(cancelResponse),
+        status: 4,
+      };
+      sendGoal.returns(goalResponse);
+      connection.emit('message', {
+        id: 'goal',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: {},
+      });
+      if (phase !== 'goal') {
+        resolveGoal(handle);
+        await nextTurn();
+      }
+      if (phase === 'cancel') {
+        connection.emit('message', {
+          id: 'cancel',
+          kind: 'action',
+          op: 'cancel',
+          goalId: 'goal',
+        });
+        resolveResult({});
+        await nextTurn();
+      }
+      connection.emit('close');
+      await clock.tickAsync(29999);
+      assert.strictEqual(node._actionClients.length, 1);
+      assert.ok(destroy.notCalled);
+      connection.emit('close');
+      connection.emit('message', {
+        id: 'after-close',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: {},
+      });
+      assert.ok(sendGoal.calledOnce);
+      await clock.tickAsync(1);
+      await nextTurn();
+      assert.strictEqual(node._actionClients.length, 0);
+      assert.ok(destroy.calledOnce);
+      resolveGoal(handle);
+      resolveResult({});
+      resolveCancel({ goals_canceling: [{}] });
+      await nextTurn();
+      await nextTurn();
+      if (phase === 'goal') assert.ok(handle.getResult.notCalled);
+      assert.strictEqual(node._actionClients.length, 0);
+      assert.ok(destroy.calledOnce);
+      assert.strictEqual(clock.countTimers(), 0);
+    });
+  }
+
+  for (const failureMode of ['throws', 'rejects']) {
+    it(`cleans up a cancel request when cancelGoal ${failureMode}`, async function () {
+      let resolveResult;
+      const handle = {
+        isAccepted: () => true,
+        getResult: () => new Promise((resolve) => (resolveResult = resolve)),
+        cancelGoal: sandbox.stub()[failureMode](new Error('cancel failed')),
+        status: 4,
+      };
+      sendGoal.resolves(handle);
+      connection.emit('message', {
+        id: 'goal',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: {},
+      });
+      await nextTurn();
+      connection.emit('message', {
+        id: 'cancel',
+        kind: 'action',
+        op: 'cancel',
+        goalId: 'goal',
+      });
+      await nextTurn();
+      assert.deepStrictEqual(connection.send.lastCall.args[0], {
+        id: 'cancel',
+        ok: false,
+        error: 'cancel failed: cancel failed',
+        code: 'action_failed',
+      });
+      assert.ok(destroy.notCalled);
+      sendGoal.firstCall.args[1]({ sequence: [1] });
+      assert.deepStrictEqual(connection.send.lastCall.args[0], {
+        event: 'feedback',
+        goalId: 'goal',
+        payload: { sequence: [1] },
+      });
+      resolveResult({ sequence: [1, 1] });
+      await nextTurn();
+      assert.deepStrictEqual(connection.send.lastCall.args[0], {
+        event: 'result',
+        goalId: 'goal',
+        payload: { sequence: [1, 1] },
+        status: 'succeeded',
+      });
+      connection.emit('close');
+      await nextTurn();
+      await nextTurn();
+      assert.strictEqual(node._actionClients.length, 0);
+      assert.ok(destroy.calledOnce);
+      assert.strictEqual(clock.countTimers(), 0);
+    });
+  }
+
+  it('keeps the client alive until all concurrent cancel requests settle', async function () {
+    let resolveResult;
+    let resolveFirstCancel;
+    let resolveSecondCancel;
+    const cancelGoal = sandbox.stub();
+    cancelGoal
+      .onFirstCall()
+      .returns(new Promise((resolve) => (resolveFirstCancel = resolve)));
+    cancelGoal
+      .onSecondCall()
+      .returns(new Promise((resolve) => (resolveSecondCancel = resolve)));
+    sendGoal.resolves({
+      isAccepted: () => true,
+      getResult: () => new Promise((resolve) => (resolveResult = resolve)),
+      cancelGoal,
+      status: 4,
+    });
+    connection.emit('message', {
+      id: 'goal',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    });
+    await nextTurn();
+    for (const id of ['first-cancel', 'second-cancel']) {
+      connection.emit('message', {
+        id,
+        kind: 'action',
+        op: 'cancel',
+        goalId: 'goal',
+      });
+    }
+    assert.ok(cancelGoal.calledTwice);
+    connection.emit('close');
+    resolveResult({});
+    await nextTurn();
+    assert.ok(destroy.notCalled);
+    const rejected = { return_code: 1, goals_canceling: [] };
+    resolveSecondCancel(rejected);
+    await nextTurn();
+    await nextTurn();
+    assert.deepStrictEqual(connection.send.lastCall.args[0], {
+      id: 'second-cancel',
+      ok: false,
+      error: 'cancel rejected: goal',
+      code: 'cancel_rejected',
+      payload: rejected,
+    });
+    assert.strictEqual(node._actionClients.length, 1);
+    assert.ok(destroy.notCalled);
+    const accepted = { return_code: 0, goals_canceling: [{}] };
+    resolveFirstCancel(accepted);
+    await nextTurn();
+    await nextTurn();
+    assert.deepStrictEqual(connection.send.lastCall.args[0], {
+      id: 'first-cancel',
+      ok: true,
+      payload: accepted,
+    });
+    assert.strictEqual(node._actionClients.length, 0);
+    assert.ok(destroy.calledOnce);
+    assert.strictEqual(clock.countTimers(), 0);
+  });
+
+  it('ignores feedback from completed goals when their wire ID is reused', async function () {
+    const feedbackCallbacks = [];
+    const results = [];
+    sendGoal.callsFake((goal, feedback) => {
+      feedbackCallbacks.push(feedback);
+      return Promise.resolve({
+        isAccepted: () => true,
+        status: 4,
+        getResult: () => new Promise((resolve) => results.push(resolve)),
+      });
+    });
+    const frame = {
+      id: 'reused',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    };
+    connection.emit('message', frame);
+    await nextTurn();
+    results[0]({});
+    await nextTurn();
+    connection.emit('message', frame);
+    await nextTurn();
+    connection.send.resetHistory();
+    feedbackCallbacks[0]({ sequence: [99] });
+    assert.ok(connection.send.notCalled);
+    feedbackCallbacks[1]({ sequence: [2] });
+    assert.deepStrictEqual(connection.send.lastCall.args[0], {
+      event: 'feedback',
+      goalId: 'reused',
+      payload: { sequence: [2] },
+    });
+    results[1]({});
+    await nextTurn();
+    connection.send.resetHistory();
+    feedbackCallbacks[1]({ sequence: [99] });
+    assert.ok(connection.send.notCalled);
+    connection.emit('close');
+    await nextTurn();
+    await nextTurn();
+  });
+
+  for (const failureMode of ['throws', 'rejects']) {
+    it(`releases feedback callbacks when getResult ${failureMode}`, async function () {
+      sendGoal.callThrough();
+      sandbox
+        .stub(ClientGoalHandle.prototype, 'getResult')
+        [failureMode](new Error('result setup failed'));
+      const actionType = 'example_interfaces/action/Fibonacci';
+      const Fibonacci = rclnodejs.require(actionType);
+      const server = new rclnodejs.ActionServer(
+        node,
+        actionType,
+        capability,
+        (goalHandle) => {
+          goalHandle.succeed();
+          return new Fibonacci.Result();
+        }
+      );
+      rclnodejs.spin(node);
+      try {
+        for (let index = 0; index < 3; index++) {
+          connection.emit('message', {
+            id: 'failed',
+            kind: 'action',
+            op: 'send_goal',
+            capability,
+            payload: { order: 1 },
+          });
+          await sendGoal.lastCall.returnValue;
+          await nextTurn();
+          assert.deepStrictEqual(connection.send.lastCall.args[0], {
+            event: 'result',
+            goalId: 'failed',
+            ok: false,
+            error: 'get result failed: result setup failed',
+            code: 'action_failed',
+          });
+          assert.strictEqual(node._actionClients.length, 1);
+          assert.strictEqual(node._actionClients[0]._feedbackCallbacks.size, 0);
+          connection.send.resetHistory();
+          sendGoal.lastCall.args[1]({ sequence: [99] });
+          assert.ok(connection.send.notCalled);
+        }
+      } finally {
+        connection.emit('close');
+        await nextTurn();
+        await nextTurn();
+        server.destroy();
+      }
+    });
+  }
+
+  it('handles a real result after the disconnected client expires', async function () {
+    sendGoal.callThrough();
+    const actionType = 'example_interfaces/action/Fibonacci';
+    const Fibonacci = rclnodejs.require(actionType);
+    let finishExecution;
+    const execution = new Promise((resolve) => (finishExecution = resolve));
+    const server = new rclnodejs.ActionServer(
+      node,
+      actionType,
+      capability,
+      async (goalHandle) => {
+        await execution;
+        goalHandle.succeed();
+        return new Fibonacci.Result();
+      }
+    );
+    let requestTaken;
+    const requested = new Promise((resolve) => (requestTaken = resolve));
+    const executeRequest = server._executeGetResultRequest;
+    sandbox.stub(server, '_executeGetResultRequest').callsFake(function (
+      ...args
+    ) {
+      executeRequest.apply(this, args);
+      requestTaken();
+    });
+    let replySent;
+    let replyFailed;
+    const responded = new Promise((resolve, reject) => {
+      replySent = resolve;
+      replyFailed = reject;
+    });
+    const sendResponse = server._sendResultResponse;
+    sandbox.stub(server, '_sendResultResponse').callsFake(function (...args) {
+      try {
+        sendResponse.apply(this, args);
+        replySent();
+      } catch (error) {
+        replyFailed(error);
+      }
+    });
+    rclnodejs.spin(node);
+    try {
+      connection.emit('message', {
+        id: 'late-result',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: { order: 1 },
+      });
+      await requested;
+      connection.emit('close');
+      await clock.tickAsync(30000);
+      await nextTurn();
+      assert.strictEqual(node._actionClients.length, 0);
+      finishExecution();
+      await responded;
+      assert.ok(destroy.calledOnce);
+    } finally {
+      server.destroy();
+    }
+  });
+
+  it('clears the drain timer when the pending goal finishes normally', async function () {
+    let resolveGoal;
+    sendGoal.returns(new Promise((resolve) => (resolveGoal = resolve)));
+    connection.emit('message', {
+      id: 'goal',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    });
+    connection.emit('close');
+    await clock.tickAsync(1000);
+    assert.ok(destroy.notCalled);
+    resolveGoal({ isAccepted: () => false });
+    await nextTurn();
+    await nextTurn();
+    assert.ok(destroy.calledOnce);
+    assert.strictEqual(node._actionClients.length, 0);
+    assert.strictEqual(clock.countTimers(), 0);
+  });
+});
+
 describe('Web Runtime end-to-end (WebSocket transport)', function () {
   this.timeout(60 * 1000);
 
   let node;
   let runtime;
+  let Fibonacci;
+  let actionServer;
+  let acceptCancellation = true;
+
+  const fibonacci = 'example_interfaces/action/Fibonacci';
+
+  async function executeAction(goalHandle) {
+    const feedback = new Fibonacci.Feedback();
+    feedback.sequence = [1, 1];
+    goalHandle.publishFeedback(feedback);
+    await assertUtils.createDelay(100);
+    const result = new Fibonacci.Result();
+    if (goalHandle.isCancelRequested) {
+      goalHandle.canceled();
+      return result;
+    }
+    goalHandle.succeed();
+    result.sequence = [1, 1, 2, 3];
+    return result;
+  }
 
   before(async function () {
     await rclnodejs.init();
+    Fibonacci = rclnodejs.require(fibonacci);
     node = rclnodejs.createNode('runtime_test_node');
     rclnodejs.spin(node);
+    actionServer = new rclnodejs.ActionServer(
+      node,
+      fibonacci,
+      '/wb_fibonacci',
+      executeAction,
+      null,
+      null,
+      () =>
+        acceptCancellation
+          ? rclnodejs.CancelResponse.ACCEPT
+          : rclnodejs.CancelResponse.REJECT
+    );
     runtime = createRuntime({
       node,
       transports: [new WebSocketTransport({ port: 0 })],
@@ -77,13 +533,22 @@ describe('Web Runtime end-to-end (WebSocket transport)', function () {
       call: { '/wb_add': 'example_interfaces/srv/AddTwoInts' },
       publish: { '/wb_pub_in': 'std_msgs/msg/String' },
       subscribe: { '/wb_chatter': 'std_msgs/msg/String' },
+      action: {
+        '/wb_fibonacci': fibonacci,
+        '/wb_offline': fibonacci,
+      },
     });
     await runtime.start();
   });
 
   after(async function () {
+    if (actionServer) actionServer.destroy();
     if (runtime) await runtime.stop();
     rclnodejs.shutdown();
+  });
+
+  afterEach(function () {
+    acceptCancellation = true;
   });
 
   function url() {
@@ -109,6 +574,18 @@ describe('Web Runtime end-to-end (WebSocket transport)', function () {
       };
       ws.on('message', onMsg);
     });
+  }
+
+  function sendGoal(ws, id, capability = '/wb_fibonacci') {
+    ws.send(
+      JSON.stringify({
+        id,
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: { order: 5 },
+      })
+    );
   }
 
   it('rejects capabilities not in the allow-list with code:not_exposed', async function () {
@@ -140,7 +617,7 @@ describe('Web Runtime end-to-end (WebSocket transport)', function () {
     ws.close();
   });
 
-  it('reserves kind:action with code:not_implemented', async function () {
+  it('rejects an action frame with a missing/unknown op with code:unknown_op', async function () {
     const ws = new WebSocket(url());
     await waitOpen(ws);
     const replyP = waitFrame(ws, (f) => f.id === 'a1');
@@ -149,8 +626,184 @@ describe('Web Runtime end-to-end (WebSocket transport)', function () {
     );
     const reply = await replyP;
     assert.strictEqual(reply.ok, false);
-    assert.strictEqual(reply.code, 'not_implemented');
+    assert.strictEqual(reply.code, 'unknown_op');
     ws.close();
+  });
+
+  it('rejects action send_goal against an unexposed capability with code:not_exposed', async function () {
+    const ws = new WebSocket(url());
+    await waitOpen(ws);
+    const replyP = waitFrame(ws, (f) => f.id === 'a2');
+    ws.send(
+      JSON.stringify({
+        id: 'a2',
+        kind: 'action',
+        op: 'send_goal',
+        capability: '/anything',
+        payload: {},
+      })
+    );
+    const reply = await replyP;
+    assert.strictEqual(reply.ok, false);
+    assert.strictEqual(reply.code, 'not_exposed');
+    ws.close();
+  });
+
+  it('rejects an exposed action whose server is unavailable', async function () {
+    const ws = new WebSocket(url());
+    await waitOpen(ws);
+    const replyP = waitFrame(ws, (f) => f.id === 'offline');
+    sendGoal(ws, 'offline', '/wb_offline');
+    const reply = await replyP;
+    assert.strictEqual(reply.ok, false);
+    assert.strictEqual(reply.code, 'action_unavailable');
+    ws.close();
+  });
+
+  it('streams action feedback and a successful result', async function () {
+    const ws = new WebSocket(url());
+    await waitOpen(ws);
+    const ackP = waitFrame(ws, (f) => f.id === 'goal-success');
+    const feedbackP = waitFrame(
+      ws,
+      (f) => f.event === 'feedback' && f.goalId === 'goal-success'
+    );
+    const resultP = waitFrame(
+      ws,
+      (f) => f.event === 'result' && f.goalId === 'goal-success'
+    );
+    sendGoal(ws, 'goal-success');
+    const ack = await ackP;
+    assert.strictEqual(ack.ok, true);
+    assert.deepStrictEqual((await feedbackP).payload.sequence, [1, 1]);
+    const result = await resultP;
+    assert.strictEqual(result.status, 'succeeded');
+    assert.deepStrictEqual(result.payload.sequence, [1, 1, 2, 3]);
+    ws.close();
+  });
+
+  it('reports accepted action cancellation', async function () {
+    acceptCancellation = true;
+    const ws = new WebSocket(url());
+    await waitOpen(ws);
+    const ackP = waitFrame(ws, (f) => f.id === 'goal-cancel');
+    const resultP = waitFrame(
+      ws,
+      (f) => f.event === 'result' && f.goalId === 'goal-cancel'
+    );
+    sendGoal(ws, 'goal-cancel');
+    await ackP;
+    const cancelP = waitFrame(ws, (f) => f.id === 'cancel-accepted');
+    ws.send(
+      JSON.stringify({
+        id: 'cancel-accepted',
+        kind: 'action',
+        op: 'cancel',
+        goalId: 'goal-cancel',
+      })
+    );
+    const cancel = await cancelP;
+    assert.strictEqual(cancel.ok, true);
+    assert.strictEqual(cancel.payload.goals_canceling.length, 1);
+    assert.strictEqual((await resultP).status, 'canceled');
+    ws.close();
+  });
+
+  it('reports rejected action cancellation', async function () {
+    acceptCancellation = false;
+    const ws = new WebSocket(url());
+    await waitOpen(ws);
+    const ackP = waitFrame(ws, (f) => f.id === 'goal-reject-cancel');
+    const resultP = waitFrame(
+      ws,
+      (f) => f.event === 'result' && f.goalId === 'goal-reject-cancel'
+    );
+    sendGoal(ws, 'goal-reject-cancel');
+    await ackP;
+    const cancelP = waitFrame(ws, (f) => f.id === 'cancel-rejected');
+    ws.send(
+      JSON.stringify({
+        id: 'cancel-rejected',
+        kind: 'action',
+        op: 'cancel',
+        goalId: 'goal-reject-cancel',
+      })
+    );
+    const cancel = await cancelP;
+    assert.strictEqual(cancel.ok, false);
+    assert.strictEqual(cancel.code, 'cancel_rejected');
+    assert.strictEqual(cancel.payload.goals_canceling.length, 0);
+    assert.strictEqual((await resultP).status, 'succeeded');
+    ws.close();
+  });
+
+  it('reports a synchronous getResult failure', async function () {
+    const getResult = sinon
+      .stub(ClientGoalHandle.prototype, 'getResult')
+      .throws(new Error('result setup failed'));
+    try {
+      const ws = new WebSocket(url());
+      await waitOpen(ws);
+      const resultP = waitFrame(
+        ws,
+        (f) => f.event === 'result' && f.goalId === 'goal-result-error'
+      );
+      sendGoal(ws, 'goal-result-error');
+      const result = await resultP;
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.code, 'action_failed');
+      assert.match(result.error, /result setup failed/);
+      ws.close();
+    } finally {
+      getResult.restore();
+    }
+  });
+
+  it('keeps the action client alive until a pending cancel settles', async function () {
+    let resolveResult;
+    let resolveCancel;
+    let actionClient;
+    const getResult = sinon
+      .stub(ClientGoalHandle.prototype, 'getResult')
+      .returns(new Promise((resolve) => (resolveResult = resolve)));
+    const cancelGoal = sinon
+      .stub(ClientGoalHandle.prototype, 'cancelGoal')
+      .callsFake(function () {
+        actionClient = this._actionClient;
+        return new Promise((resolve) => (resolveCancel = resolve));
+      });
+    const destroy = sinon.spy(ActionClient.prototype, 'destroy');
+    try {
+      const ws = new WebSocket(url());
+      await waitOpen(ws);
+      const ackP = waitFrame(ws, (f) => f.id === 'goal-pending-cancel');
+      sendGoal(ws, 'goal-pending-cancel');
+      await ackP;
+      ws.send(
+        JSON.stringify({
+          id: 'pending-cancel',
+          kind: 'action',
+          op: 'cancel',
+          goalId: 'goal-pending-cancel',
+        })
+      );
+      while (!cancelGoal.called) {
+        await assertUtils.createDelay(5);
+      }
+      const closed = new Promise((resolve) => ws.once('close', resolve));
+      ws.close();
+      await closed;
+      resolveResult(new Fibonacci.Result());
+      await assertUtils.createDelay(20);
+      assert.strictEqual(destroy.calledOn(actionClient), false);
+      resolveCancel({ return_code: 0, goals_canceling: [{}] });
+      await assertUtils.createDelay(20);
+      assert.strictEqual(destroy.calledOn(actionClient), true);
+    } finally {
+      getResult.restore();
+      cancelGoal.restore();
+      destroy.restore();
+    }
   });
 
   it('rejects non-JSON frames with code:invalid_json', async function () {

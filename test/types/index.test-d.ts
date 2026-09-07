@@ -3,7 +3,13 @@
 
 import { expectType, expectAssignable, expectError } from 'tsd';
 import * as rclnodejs from 'rclnodejs';
-import type { ActionHandle, ActionStatus } from 'rclnodejs/web';
+import type {
+  ActionHandle,
+  ActionStatus,
+  Int64Wire,
+  RosClient,
+  WireType,
+} from 'rclnodejs/web';
 import { ChildProcess } from 'child_process';
 import { Observable } from 'rxjs';
 
@@ -24,6 +30,47 @@ expectAssignable<ActionStatus>('aborted');
 expectAssignable<ActionStatus>('unknown');
 expectError((webAction.status = 'succeeded'));
 expectType<Promise<void>>(webAction.cancel());
+
+declare const webClient: RosClient;
+const fibonacciAction = webClient.action<'example_interfaces/action/Fibonacci'>(
+  '/fibonacci',
+  { order: 5 },
+  {
+    onFeedback(feedback) {
+      expectType<{ sequence: number[] }>(feedback);
+    },
+  }
+);
+expectType<Promise<ActionHandle<{ sequence: number[] }>>>(fibonacciAction);
+fibonacciAction.then((goal) => {
+  expectType<Promise<{ sequence: number[] }>>(goal.result);
+  expectType<ActionStatus | undefined>(goal.status);
+  expectType<Promise<void>>(goal.cancel());
+});
+expectError(
+  webClient.action<'example_interfaces/action/Fibonacci'>('/fibonacci', {
+    order: '5',
+  })
+);
+expectError(
+  webClient.action<'example_interfaces/action/Fibonacci'>('/fibonacci', {})
+);
+expectType<Promise<ActionHandle<{ sequence: number[] }>>>(
+  webClient.action<'example_interfaces/action/Fibonacci'>(
+    '/fibonacci',
+    { order: 5 },
+    null
+  )
+);
+expectType<Promise<ActionHandle>>(
+  webClient.action('/custom_action', { custom: true }, null)
+);
+
+declare const wireArrays: WireType<{
+  values: Uint8Array | Float64Array;
+  ids: BigInt64Array | BigUint64Array;
+}>;
+expectType<{ values: number[]; ids: Int64Wire[] }>(wireArrays);
 
 // ---- rclnodejs -----
 expectType<Promise<void>>(rclnodejs.init());

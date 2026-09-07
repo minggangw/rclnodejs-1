@@ -275,6 +275,19 @@ describe('Action capability dispatch', function () {
       }
     });
 
+    it('treats null and undefined action options as omitted', async function () {
+      const ros = await connect(wsUrl);
+      try {
+        for (const options of [null, undefined]) {
+          const goal = await ros.action('/fibonacci', { order: 5 }, options);
+          assert.deepStrictEqual(await goal.result, { sequence: [1, 1, 2, 3] });
+          assert.strictEqual(goal.status, 'succeeded');
+        }
+      } finally {
+        await ros.close();
+      }
+    });
+
     it('rejects actions during and after WebSocket close without tracking goals', async function () {
       const ros = await connect(wsUrl);
       const closing = ros.close();
@@ -300,10 +313,14 @@ describe('Action capability dispatch', function () {
       try {
         const goal = await ros.action('/fibonacci', { order: 5 });
         await assertUtils.createDelay(20);
-        await goal.cancel();
+        assert.strictEqual(await goal.cancel(), undefined);
         const result = await goal.result;
         assert.deepStrictEqual(result, { sequence: [] });
         assert.strictEqual(goal.status, 'canceled');
+        await assert.rejects(
+          goal.cancel(),
+          (error) => error.code === 'unknown_goal_id'
+        );
       } finally {
         await ros.close();
       }

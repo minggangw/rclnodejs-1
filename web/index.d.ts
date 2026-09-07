@@ -32,14 +32,14 @@ declare module 'rclnodejs/web' {
   /**
    * Map an in-process rclnodejs message shape to its on-wire JSON shape.
    *
-   * The Web Runtime serialises messages as JSON with one transformation:
-   * 64-bit integer fields (`bigint` in the generated types) become the
-   * string `"<n>n"` so they survive `JSON.stringify`. Everything else
-   * passes through unchanged.
+   * The Web Runtime serialises typed arrays as regular JSON arrays.
+   * 64-bit integer fields (`bigint` in the generated types) become
+   * `"<n>n"` strings so they survive `JSON.stringify`.
    *
    * Cases (checked in order):
    *   - `bigint`            → {@link Int64Wire} (the `"<n>n"` string)
    *   - `ReadonlyArray<U>`  → `WireType<U>[]`   (recurse per element)
+   *   - typed arrays        → `WireType<Element>[]`
    *   - `Date`              → `string`          (ISO string on the wire)
    *   - `object`            → field-wise recursion
    *   - everything else     → passes through unchanged
@@ -56,14 +56,15 @@ declare module 'rclnodejs/web' {
   export type WireType<T> = [T] extends [bigint] ? Int64Wire : _WireRecurse<T>;
 
   /** Recursion step for {@link WireType}; pulled out to keep the cascade flat. */
-  type _WireRecurse<T> =
-    T extends ReadonlyArray<infer U>
-      ? WireType<U>[]
-      : T extends Date
-        ? string
-        : T extends object
-          ? { [K in keyof T]: WireType<T[K]> }
-          : T;
+  type _WireRecurse<T> = T extends
+    | ReadonlyArray<infer Element>
+    | (ArrayBufferView & { readonly [index: number]: infer Element })
+    ? WireType<Element>[]
+    : T extends Date
+      ? string
+      : T extends object
+        ? { [K in keyof T]: WireType<T[K]> }
+        : T;
 
   // -------- Type-name lookup helpers ----------------------------------
 
@@ -280,12 +281,14 @@ declare module 'rclnodejs/web' {
     action<TName extends ActionName>(
       capability: string,
       goal: ActionGoal<TName>,
-      options?: { onFeedback?: (feedback: ActionFeedback<TName>) => void }
+      options?: {
+        onFeedback?: (feedback: ActionFeedback<TName>) => void;
+      } | null
     ): Promise<ActionHandle<ActionResult<TName>>>;
     action(
       capability: string,
       goal: unknown,
-      options?: { onFeedback?: (feedback: unknown) => void }
+      options?: { onFeedback?: (feedback: unknown) => void } | null
     ): Promise<ActionHandle>;
   }
 

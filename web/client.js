@@ -219,13 +219,14 @@ class _WsLink {
   publish(capability, payload) {
     return this._request({ kind: 'publish', capability, payload });
   }
-  action(capability, payload, { onFeedback } = {}) {
+  action(capability, payload, options) {
     if (this._closed || this._isUserClosed) {
       return Promise.reject(new Error('connection closed'));
     }
     if (this._isReconnecting) {
       return Promise.reject(_connectionLostError());
     }
+    const { onFeedback } = options ?? {};
     const id = _genId();
     // Registered synchronously, before the frame is even sent: feedback is
     // delivered over a separate topic subscription from the goal-accept
@@ -272,8 +273,8 @@ class _WsLink {
       });
     });
   }
-  _cancelGoal(goalId) {
-    return this._request({ kind: 'action', op: 'cancel', goalId });
+  async _cancelGoal(goalId) {
+    await this._request({ kind: 'action', op: 'cancel', goalId });
   }
   subscribe(capability, callback) {
     if (this._isReconnecting) {
@@ -743,7 +744,7 @@ export class RosClient {
    * and abortion without changing the result payload.
    * @param {string} capability
    * @param {*} payload The goal.
-   * @param {object} [options]
+   * @param {object|null} [options]
    * @param {(feedback: *) => void} [options.onFeedback]
    */
   async action(capability, payload, options) {

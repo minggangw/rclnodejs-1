@@ -184,6 +184,126 @@ describe('Dispatcher action cleanup', function () {
     });
   }
 
+  for (const failureMode of ['throws', 'rejects']) {
+    it(`cleans up a cancel request when cancelGoal ${failureMode}`, async function () {
+      let resolveResult;
+      const handle = {
+        isAccepted: () => true,
+        getResult: () => new Promise((resolve) => (resolveResult = resolve)),
+        cancelGoal: sandbox.stub()[failureMode](new Error('cancel failed')),
+        status: 4,
+      };
+      sendGoal.resolves(handle);
+      connection.emit('message', {
+        id: 'goal',
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload: {},
+      });
+      await nextTurn();
+      connection.emit('message', {
+        id: 'cancel',
+        kind: 'action',
+        op: 'cancel',
+        goalId: 'goal',
+      });
+      await nextTurn();
+      assert.deepStrictEqual(connection.send.lastCall.args[0], {
+        id: 'cancel',
+        ok: false,
+        error: 'cancel failed: cancel failed',
+        code: 'action_failed',
+      });
+      assert.ok(destroy.notCalled);
+      sendGoal.firstCall.args[1]({ sequence: [1] });
+      assert.deepStrictEqual(connection.send.lastCall.args[0], {
+        event: 'feedback',
+        goalId: 'goal',
+        payload: { sequence: [1] },
+      });
+      resolveResult({ sequence: [1, 1] });
+      await nextTurn();
+      assert.deepStrictEqual(connection.send.lastCall.args[0], {
+        event: 'result',
+        goalId: 'goal',
+        payload: { sequence: [1, 1] },
+        status: 'succeeded',
+      });
+      connection.emit('close');
+      await nextTurn();
+      await nextTurn();
+      assert.strictEqual(node._actionClients.length, 0);
+      assert.ok(destroy.calledOnce);
+      assert.strictEqual(clock.countTimers(), 0);
+    });
+  }
+
+  it('keeps the client alive until all concurrent cancel requests settle', async function () {
+    let resolveResult;
+    let resolveFirstCancel;
+    let resolveSecondCancel;
+    const cancelGoal = sandbox.stub();
+    cancelGoal
+      .onFirstCall()
+      .returns(new Promise((resolve) => (resolveFirstCancel = resolve)));
+    cancelGoal
+      .onSecondCall()
+      .returns(new Promise((resolve) => (resolveSecondCancel = resolve)));
+    sendGoal.resolves({
+      isAccepted: () => true,
+      getResult: () => new Promise((resolve) => (resolveResult = resolve)),
+      cancelGoal,
+      status: 4,
+    });
+    connection.emit('message', {
+      id: 'goal',
+      kind: 'action',
+      op: 'send_goal',
+      capability,
+      payload: {},
+    });
+    await nextTurn();
+    for (const id of ['first-cancel', 'second-cancel']) {
+      connection.emit('message', {
+        id,
+        kind: 'action',
+        op: 'cancel',
+        goalId: 'goal',
+      });
+    }
+    assert.ok(cancelGoal.calledTwice);
+    connection.emit('close');
+    resolveResult({});
+    await nextTurn();
+    assert.ok(destroy.notCalled);
+    const rejected = { return_code: 1, goals_canceling: [] };
+    resolveSecondCancel(rejected);
+    await nextTurn();
+    await nextTurn();
+    assert.deepStrictEqual(connection.send.lastCall.args[0], {
+      id: 'second-cancel',
+      ok: false,
+      error: 'cancel rejected: goal',
+      code: 'cancel_rejected',
+      payload: rejected,
+    });
+    assert.strictEqual(node._actionClients.length, 1);
+    assert.ok(destroy.notCalled);
+    const accepted = { return_code: 0, goals_canceling: [{}] };
+    resolveFirstCancel(accepted);
+    await nextTurn();
+    await nextTurn();
+    assert.deepStrictEqual(connection.send.lastCall.args[0], {
+      id: 'first-cancel',
+      ok: true,
+      payload: accepted,
+    });
+    assert.strictEqual(node._actionClients.length, 0);
+    assert.ok(destroy.calledOnce);
+    assert.strictEqual(clock.countTimers(), 0);
+  });
+
   it('ignores feedback from completed goals when their wire ID is reused', async function () {
     const feedbackCallbacks = [];
     const results = [];

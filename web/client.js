@@ -230,11 +230,8 @@ class _WsLink {
     }
     const { onFeedback } = options ?? {};
     const id = _genId();
-    // Registered synchronously, before the frame is even sent: feedback is
-    // delivered over a separate topic subscription from the goal-accept
-    // service response, so a feedback frame can race ahead of the accept
-    // ack. If _goals isn't populated yet when that happens, the feedback
-    // is silently dropped (no id to route it to).
+    // Register the goal before sending to avoid dropping feedback that
+    // arrives before the acknowledgement.
     let resolveResult, rejectResult;
     const result = new Promise((res, rej) => {
       resolveResult = res;

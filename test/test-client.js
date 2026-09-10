@@ -1,4 +1,5 @@
 import assert from 'assert';
+import { getEventListeners } from 'events';
 import sinon from 'sinon';
 import rclnodejsBinding from '../lib/native_loader.js';
 import Client from '../lib/client.js';
@@ -190,6 +191,103 @@ describe('Client coverage testing', function () {
     const result = await promise;
     assert.deepStrictEqual(result, new MockTypeClass.Response());
   });
+
+  it('sendRequestAsync releases abort listeners after successful requests', async function () {
+    const client = new Client(
+      mockHandle,
+      mockNodeHandle,
+      'test_service',
+      MockTypeClass,
+      {}
+    );
+    const controller = new AbortController();
+    const callerListener = sinon.spy();
+    controller.signal.addEventListener('abort', callerListener);
+
+    for (let requestIndex = 0; requestIndex < 3; requestIndex++) {
+      const promise = client.sendRequestAsync(
+        { a: requestIndex },
+        { signal: controller.signal }
+      );
+      client.processResponse(12345, new MockTypeClass.Response());
+      assert.deepStrictEqual(await promise, { sum: 3 });
+      assert.strictEqual(client._sequenceNumberToCallbackMap.size, 0);
+      assert.deepStrictEqual(getEventListeners(controller.signal, 'abort'), [
+        callerListener,
+      ]);
+    }
+
+    controller.abort();
+    assert.ok(callerListener.calledOnce);
+  });
+
+  for (const outcome of [
+    'success',
+    'manual abort',
+    'timeout',
+    'serialization error',
+    'send error',
+    'pre-aborted signal',
+  ]) {
+    it(`sendRequestAsync cleans up timeout and abort listeners on ${outcome}`, async function () {
+      const client = new Client(
+        mockHandle,
+        mockNodeHandle,
+        'test_service',
+        MockTypeClass,
+        {}
+      );
+      const controller = new AbortController();
+      const timeoutController = new AbortController();
+      const timeoutStub = sandbox
+        .stub(AbortSignal, 'timeout')
+        .returns(timeoutController.signal);
+      const combinedSignalSpy = sandbox.spy(AbortSignal, 'any');
+      const failure = new Error('Request failed');
+
+      if (outcome === 'pre-aborted signal') {
+        controller.abort();
+      } else if (outcome === 'serialization error') {
+        sandbox
+          .stub(MockTypeClass.Request.prototype, 'serialize')
+          .throws(failure);
+      } else if (outcome === 'send error') {
+        rclnodejsBinding.sendRequest.throws(failure);
+      }
+
+      const promise = client.sendRequestAsync(
+        { a: 1 },
+        { signal: controller.signal, timeout: 1000 }
+      );
+      const effectiveSignal = combinedSignalSpy.firstCall.returnValue;
+
+      if (outcome === 'success') {
+        client.processResponse(12345, new MockTypeClass.Response());
+        assert.deepStrictEqual(await promise, { sum: 3 });
+      } else {
+        const expectedError = outcome.endsWith('error')
+          ? failure
+          : { name: outcome === 'timeout' ? 'TimeoutError' : 'AbortError' };
+        const rejected = assert.rejects(promise, expectedError);
+        if (outcome === 'manual abort') controller.abort();
+        if (outcome === 'timeout') timeoutController.abort();
+        await rejected;
+      }
+
+      assert.ok(timeoutStub.calledOnceWithExactly(1000));
+      assert.strictEqual(client._sequenceNumberToCallbackMap.size, 0);
+      for (const signal of [
+        controller.signal,
+        timeoutController.signal,
+        effectiveSignal,
+      ]) {
+        assert.deepStrictEqual(getEventListeners(signal, 'abort'), []);
+      }
+      if (outcome === 'pre-aborted signal') {
+        assert.ok(rclnodejsBinding.sendRequest.notCalled);
+      }
+    });
+  }
 
   it('sendRequestAsync handles timeout', async function () {
     const client = new Client(

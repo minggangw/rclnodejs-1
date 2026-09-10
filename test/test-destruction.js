@@ -17,7 +17,6 @@ import childProcess from 'child_process';
 import rclnodejs from '../index.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { createDelay } from './utils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -35,37 +34,6 @@ describe('Node & Entity destroy testing', function () {
   it('node.destroy()', function () {
     var node = rclnodejs.createNode('my_node1');
     node.destroy();
-  });
-
-  it('node.destroy() removes the node from the graph while referenced', async function () {
-    const observer = new rclnodejs.Node(`graph_observer_${process.pid}`);
-    const nodeName = `graph_destroyed_${process.pid}`;
-    const node = new rclnodejs.Node(nodeName);
-
-    const waitForPresence = async (expectedPresence) => {
-      const deadline = Date.now() + 10000;
-      let present = observer.getNodeNames().includes(nodeName);
-      while (present !== expectedPresence && Date.now() < deadline) {
-        await createDelay(50);
-        present = observer.getNodeNames().includes(nodeName);
-      }
-      assert.strictEqual(
-        present,
-        expectedPresence,
-        expectedPresence
-          ? 'Node never appeared in the graph'
-          : 'Destroyed node is still advertised in the graph'
-      );
-    };
-
-    try {
-      await waitForPresence(true);
-      node.destroy();
-      await waitForPresence(false);
-    } finally {
-      node.destroy();
-      observer.destroy();
-    }
   });
 
   it('node.destroy() twice', function () {

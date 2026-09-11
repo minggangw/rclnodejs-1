@@ -1,7 +1,15 @@
 /// <reference path='../../types/index.d.ts' />
+/// <reference path='../../web/index.d.ts' />
 
-import { expectType, expectAssignable } from 'tsd';
+import { expectType, expectAssignable, expectError } from 'tsd';
 import * as rclnodejs from 'rclnodejs';
+import type {
+  ActionHandle,
+  ActionStatus,
+  Int64Wire,
+  RosClient,
+  WireType,
+} from 'rclnodejs/web';
 import { ChildProcess } from 'child_process';
 import { Observable } from 'rxjs';
 
@@ -12,6 +20,57 @@ const TOPIC = 'topic';
 const SERVICE_NAME = 'service';
 const MSG = rclnodejs.createMessageObject(TYPE_CLASS);
 MSG.data = '';
+
+declare const webAction: ActionHandle<{ sequence: number[] }>;
+expectType<Promise<{ sequence: number[] }>>(webAction.result);
+expectType<ActionStatus | undefined>(webAction.status);
+expectAssignable<ActionStatus>('succeeded');
+expectAssignable<ActionStatus>('canceled');
+expectAssignable<ActionStatus>('aborted');
+expectAssignable<ActionStatus>('unknown');
+expectError((webAction.status = 'succeeded'));
+expectType<Promise<void>>(webAction.cancel());
+
+declare const webClient: RosClient;
+const fibonacciAction = webClient.action<'example_interfaces/action/Fibonacci'>(
+  '/fibonacci',
+  { order: 5 },
+  {
+    onFeedback(feedback) {
+      expectType<{ sequence: number[] }>(feedback);
+    },
+  }
+);
+expectType<Promise<ActionHandle<{ sequence: number[] }>>>(fibonacciAction);
+fibonacciAction.then((goal) => {
+  expectType<Promise<{ sequence: number[] }>>(goal.result);
+  expectType<ActionStatus | undefined>(goal.status);
+  expectType<Promise<void>>(goal.cancel());
+});
+expectError(
+  webClient.action<'example_interfaces/action/Fibonacci'>('/fibonacci', {
+    order: '5',
+  })
+);
+expectError(
+  webClient.action<'example_interfaces/action/Fibonacci'>('/fibonacci', {})
+);
+expectType<Promise<ActionHandle<{ sequence: number[] }>>>(
+  webClient.action<'example_interfaces/action/Fibonacci'>(
+    '/fibonacci',
+    { order: 5 },
+    null
+  )
+);
+expectType<Promise<ActionHandle>>(
+  webClient.action('/custom_action', { custom: true }, null)
+);
+
+declare const wireArrays: WireType<{
+  values: Uint8Array | Float64Array;
+  ids: BigInt64Array | BigUint64Array;
+}>;
+expectType<{ values: number[]; ids: Int64Wire[] }>(wireArrays);
 
 // ---- rclnodejs -----
 expectType<Promise<void>>(rclnodejs.init());

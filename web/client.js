@@ -23,9 +23,9 @@
 //
 // Two transports are supported, picked from the URL scheme:
 //
-//   - ws:// / wss://       → WebSocket only (call/publish/subscribe).
-//   - http:// / https://   → HTTP for call/publish; subscribe lazily
-//                            falls through to a sibling WebSocket.
+//   - ws:// / wss://       → WebSocket only (call/publish/subscribe/action).
+//   - http:// / https://   → HTTP for call/publish; subscribe and action
+//                            lazily use a sibling WebSocket.
 //   - { http, ws }         → explicit endpoint pair.
 
 let WS = globalThis.WebSocket;
@@ -76,7 +76,7 @@ function _backoffDelay(attempt, { baseMs = 500, maxMs = 30000 } = {}) {
 /**
  * WebSocket link. Speaks the capability frame protocol used by
  * `WebSocketTransport` on the server. Long-lived; supports `call`,
- * `publish`, `subscribe`, `unsubscribe` (and reserved `action`).
+ * `publish`, `subscribe`, `unsubscribe`, and `action`.
  *
  * With `options.reconnect`, a drop after a successful open reopens with
  * backoff and replays subscriptions under the same `subId`. The *first*
@@ -97,6 +97,7 @@ class _WsLink {
     this._ws = null;
     this._pending = new Map();
     this._subs = new Map();
+    this._goals = new Map(); // goal id -> { onFeedback, resolveResult, rejectResult }
     this._closed = false;
     this._isUserClosed = false;
     this._isReconnecting = false;
@@ -215,9 +216,68 @@ class _WsLink {
   call(capability, payload) {
     return this._request({ kind: 'call', capability, payload });
   }
+
   publish(capability, payload) {
     return this._request({ kind: 'publish', capability, payload });
   }
+
+  action(capability, payload, options) {
+    if (this._closed || this._isUserClosed) {
+      return Promise.reject(new Error('connection closed'));
+    }
+    if (this._isReconnecting) {
+      return Promise.reject(_connectionLostError());
+    }
+    const { onFeedback } = options ?? {};
+    const id = _genId();
+    // Register the goal before sending to avoid dropping feedback that
+    // arrives before the acknowledgement.
+    let resolveResult, rejectResult;
+    const result = new Promise((res, rej) => {
+      resolveResult = res;
+      rejectResult = rej;
+    });
+    let status;
+    this._goals.set(id, {
+      onFeedback,
+      resolveResult,
+      rejectResult,
+      setStatus(value) {
+        status = value;
+      },
+    });
+    return new Promise((resolve, reject) => {
+      this._pending.set(id, {
+        resolve: () => {
+          resolve({
+            goalId: id,
+            result,
+            get status() {
+              return status;
+            },
+            cancel: () => this._cancelGoal(id),
+          });
+        },
+        reject: (err) => {
+          // Acceptance was not confirmed; stop local tracking.
+          this._goals.delete(id);
+          reject(err);
+        },
+      });
+      this._sendRaw({
+        id,
+        kind: 'action',
+        op: 'send_goal',
+        capability,
+        payload,
+      });
+    });
+  }
+
+  async _cancelGoal(goalId) {
+    await this._request({ kind: 'action', op: 'cancel', goalId });
+  }
+
   subscribe(capability, callback) {
     if (this._isReconnecting) {
       return Promise.reject(_connectionLostError());
@@ -237,6 +297,7 @@ class _WsLink {
       this._sendRaw({ id, kind: 'subscribe', capability });
     });
   }
+
   _unsubscribe(subId) {
     this._subs.delete(subId);
     return this._request({ kind: 'unsubscribe', subId });
@@ -333,6 +394,38 @@ class _WsLink {
       }
       return;
     }
+    if (frame.event === 'feedback') {
+      const goal = this._goals.get(frame.goalId);
+      if (goal && goal.onFeedback) {
+        try {
+          goal.onFeedback(frame.payload);
+        } catch (_) {
+          // user callback errors don't break the dispatch loop
+        }
+      }
+      return;
+    }
+    if (frame.event === 'result') {
+      const goal = this._goals.get(frame.goalId);
+      this._goals.delete(frame.goalId);
+      if (goal) {
+        goal.setStatus(
+          ['succeeded', 'canceled', 'aborted'].includes(frame.status)
+            ? frame.status
+            : 'unknown'
+        );
+        if (frame.ok === false) {
+          goal.rejectResult(
+            Object.assign(new Error(frame.error || 'action failed'), {
+              code: frame.code,
+            })
+          );
+        } else {
+          goal.resolveResult(frame.payload);
+        }
+      }
+      return;
+    }
     const pend = this._pending.get(frame.id);
     if (!pend) return;
     this._pending.delete(frame.id);
@@ -351,14 +444,18 @@ class _WsLink {
       p.reject(cause);
     }
     this._pending.clear();
+    for (const goal of this._goals.values()) {
+      goal.rejectResult(cause);
+    }
+    this._goals.clear();
   }
 }
 
 /**
  * HTTP link. Speaks the L2 HTTP capability protocol used by
  * `HttpTransport` on the server. Stateless — every `call`/`publish`
- * is a one-shot `fetch()`. Does not support subscribe; the public
- * client falls through to the WebSocket link for streaming verbs.
+ * is a one-shot `fetch()`. Does not support subscribe or actions;
+ * the public client uses the WebSocket link for those verbs.
  */
 class _HttpLink {
   constructor(baseUrl) {
@@ -462,9 +559,9 @@ function _encodeRosName(name) {
  *
  * Picks a transport from the URL scheme:
  *
- *   - `ws://`, `wss://`      → WebSocket only (call/publish/subscribe).
- *   - `http://`, `https://`  → HTTP for `call`/`publish`; `subscribe`
- *     lazily falls through to a sibling WebSocket endpoint at the
+ *   - `ws://`, `wss://`      → WebSocket only (call/publish/subscribe/action).
+ *   - `http://`, `https://`  → HTTP for `call`/`publish`; `subscribe` and
+ *     `action` lazily use a sibling WebSocket endpoint at the
  *     same host with `/capability` appended.
  *   - object `{http, ws}`    → both URLs spelled out explicitly.
  *
@@ -481,7 +578,7 @@ function _encodeRosName(name) {
  *   // WebSocket-only (path defaults to /capability)
  *   const ros = await connect('ws://robot.local:9000');
  *
- *   // HTTP for call/publish, automatic WS sibling for subscribe
+ *   // HTTP for call/publish, WS sibling for subscribe/action
  *   const ros = await connect('http://robot.local:9001');
  *
  *   // Split endpoints (e.g. WS behind a different proxy)
@@ -502,6 +599,7 @@ export class RosClient {
    */
   constructor(url, options = {}) {
     this.options = options;
+    this._closed = false;
     this._listeners = new Map(); // event name -> Set<handler>
     const { httpUrl, wsUrl, wsExplicit } = _resolveUrls(url);
     this.url = httpUrl || wsUrl;
@@ -513,9 +611,8 @@ export class RosClient {
     this._http = httpUrl ? new _HttpLink(httpUrl) : null;
     this._wsUrl = wsUrl;
     // Eagerly construct (but don't yet open) the WS link when the user
-    // explicitly asked for it. When the WS URL was *derived* from an
-    // HTTP base, leave construction lazy — most HTTP-only callers
-    // never subscribe and never need the WS sibling at all.
+    // explicitly asked for it. When the WS URL was derived from an
+    // HTTP base, leave construction lazy until subscribe() or action().
     this._ws = wsExplicit && wsUrl ? new _WsLink(wsUrl, this._wsOptions) : null;
     this._wsEager = !!wsExplicit;
     this._wsConnect = null; // memoised connect promise (in-flight or settled)
@@ -558,10 +655,10 @@ export class RosClient {
 
   /** Open the link(s). */
   async connect() {
-    // Open HTTP eagerly (it's a no-op anyway). Defer the WebSocket
-    // open until the user actually calls subscribe() — that way an
-    // HTTP-only deployment with no WS sibling works for call/publish
-    // without blowing up here.
+    if (this._closed) throw new Error('connection closed');
+    // Open HTTP eagerly (it's a no-op anyway). Defer a derived WebSocket
+    // until subscribe() or action(), allowing HTTP-only deployments to
+    // use call/publish without a WebSocket endpoint.
     if (this._http) await this._http.connect();
     if (this._wsEager) await this._ensureWs();
     return this;
@@ -569,6 +666,7 @@ export class RosClient {
 
   /** Close the underlying link(s). */
   async close() {
+    this._closed = true;
     const tasks = [];
     if (this._http) tasks.push(this._http.close());
     if (this._wsConnect) {
@@ -592,6 +690,7 @@ export class RosClient {
    * structured error if no WS URL is available or the open fails.
    */
   async _ensureWs() {
+    if (this._closed) throw new Error('connection closed');
     if (!this._wsUrl) {
       throw Object.assign(
         new Error(
@@ -608,7 +707,7 @@ export class RosClient {
     this._wsConnect = link.connect().then(
       () => link,
       (err) => {
-        this._wsConnect = null; // allow a retry on next subscribe()
+        this._wsConnect = null; // allow retry on the next WebSocket operation
         throw Object.assign(
           new Error(
             `failed to open WebSocket sibling at ${this._wsUrl}: ${err && err.message ? err.message : String(err)}`
@@ -640,6 +739,28 @@ export class RosClient {
     }
     const ws = await this._ensureWs();
     return ws.subscribe(capability, callback);
+  }
+
+  /**
+   * Send an action goal. Returns `{ goalId, result, status, cancel() }` where
+   * `result` is a Promise resolving with the action result, and `cancel()`
+   * requests cancellation over WebSocket.
+   * Read `status` after awaiting `result` to distinguish success, cancellation,
+   * and abortion without changing the result payload.
+   * @param {string} capability
+   * @param {*} payload The goal.
+   * @param {object|null} [options]
+   * @param {(feedback: *) => void} [options.onFeedback]
+   */
+  async action(capability, payload, options) {
+    const { onFeedback } = options ?? {};
+    if (onFeedback !== undefined && typeof onFeedback !== 'function') {
+      throw new TypeError(
+        'action(capability, payload, options): onFeedback must be a function'
+      );
+    }
+    const ws = await this._ensureWs();
+    return ws.action(capability, payload, { onFeedback });
   }
 }
 
@@ -673,8 +794,8 @@ function _resolveUrls(url) {
     return { httpUrl: null, wsUrl: _normaliseWsPath(url), wsExplicit: true };
   }
   if (/^https?:\/\//i.test(url)) {
-    // HTTP base URL: derive a sibling WS URL lazily — we don't open
-    // it until the user actually calls subscribe().
+    // HTTP base URL: derive a sibling WS URL, but open it only for
+    // subscribe() or action().
     return { httpUrl: url, wsUrl: _deriveWsSibling(url), wsExplicit: false };
   }
   throw new TypeError(

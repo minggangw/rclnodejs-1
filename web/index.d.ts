@@ -32,14 +32,14 @@ declare module 'rclnodejs/web' {
   /**
    * Map an in-process rclnodejs message shape to its on-wire JSON shape.
    *
-   * The Web Runtime serialises messages as JSON with one transformation:
-   * 64-bit integer fields (`bigint` in the generated types) become the
-   * string `"<n>n"` so they survive `JSON.stringify`. Everything else
-   * passes through unchanged.
+   * The Web Runtime serialises typed arrays as regular JSON arrays.
+   * 64-bit integer fields (`bigint` in the generated types) become
+   * `"<n>n"` strings so they survive `JSON.stringify`.
    *
    * Cases (checked in order):
    *   - `bigint`            → {@link Int64Wire} (the `"<n>n"` string)
    *   - `ReadonlyArray<U>`  → `WireType<U>[]`   (recurse per element)
+   *   - typed arrays        → `WireType<Element>[]`
    *   - `Date`              → `string`          (ISO string on the wire)
    *   - `object`            → field-wise recursion
    *   - everything else     → passes through unchanged
@@ -56,14 +56,15 @@ declare module 'rclnodejs/web' {
   export type WireType<T> = [T] extends [bigint] ? Int64Wire : _WireRecurse<T>;
 
   /** Recursion step for {@link WireType}; pulled out to keep the cascade flat. */
-  type _WireRecurse<T> =
-    T extends ReadonlyArray<infer U>
-      ? WireType<U>[]
-      : T extends Date
-        ? string
-        : T extends object
-          ? { [K in keyof T]: WireType<T[K]> }
-          : T;
+  type _WireRecurse<T> = T extends
+    | ReadonlyArray<infer Element>
+    | (ArrayBufferView & { readonly [index: number]: infer Element })
+    ? WireType<Element>[]
+    : T extends Date
+      ? string
+      : T extends object
+        ? { [K in keyof T]: WireType<T[K]> }
+        : T;
 
   // -------- Type-name lookup helpers ----------------------------------
 
@@ -98,6 +99,24 @@ declare module 'rclnodejs/web' {
     InstanceType<_SvcCtor<TName>['Response']>
   >;
 
+  /** ROS 2 action type names available in the sourced environment. */
+  export type ActionName = keyof import('rclnodejs').ActionsMap;
+
+  /** Wire shape of the named action's goal request. */
+  export type ActionGoal<TName extends ActionName> = WireType<
+    import('rclnodejs').ActionGoal<TName>
+  >;
+
+  /** Wire shape of the named action's feedback message. */
+  export type ActionFeedback<TName extends ActionName> = WireType<
+    import('rclnodejs').ActionFeedback<TName>
+  >;
+
+  /** Wire shape of the named action's result. */
+  export type ActionResult<TName extends ActionName> = WireType<
+    import('rclnodejs').ActionResult<TName>
+  >;
+
   // -------- SDK ------------------------------------------------------
 
   /**
@@ -107,6 +126,23 @@ declare module 'rclnodejs/web' {
   export interface Subscription {
     readonly subId: string;
     close(): Promise<void>;
+  }
+
+  export type ActionStatus = 'succeeded' | 'canceled' | 'aborted' | 'unknown';
+
+  /**
+   * Handle for an in-flight action goal, returned by {@link RosClient.action}.
+   *
+   * `cancel()` requests cancellation of the goal over WebSocket.
+   * `result` resolves with the ROS payload even when canceled or aborted;
+   * inspect `status` after awaiting it to determine the outcome.
+   */
+  export interface ActionHandle<TResult = unknown> {
+    readonly goalId: string;
+    readonly result: Promise<TResult>;
+    /** Undefined until a terminal response; missing/unrecognized status is 'unknown'. */
+    readonly status: ActionStatus | undefined;
+    cancel(): Promise<void>;
   }
 
   export interface ConnectOptions {
@@ -228,6 +264,32 @@ declare module 'rclnodejs/web' {
       capability: string,
       callback: (msg: unknown) => void
     ): Promise<Subscription>;
+
+    /**
+     * Send an action goal.
+     *
+     * @example Typed via the ROS action type name (preferred)
+     *   const goal = await ros.action<'example_interfaces/action/Fibonacci'>(
+     *     '/fibonacci', { order: 5 }, { onFeedback: (fb) => console.log(fb) }
+     *   );
+     *   const result = await goal.result;
+     *
+     * @example Untyped (capability with a custom type not in the
+     *          generated maps, or quick prototyping)
+     *   const goal = await ros.action('/whatever', { foo: 1 });
+     */
+    action<TName extends ActionName>(
+      capability: string,
+      goal: ActionGoal<TName>,
+      options?: {
+        onFeedback?: (feedback: ActionFeedback<TName>) => void;
+      } | null
+    ): Promise<ActionHandle<ActionResult<TName>>>;
+    action(
+      capability: string,
+      goal: unknown,
+      options?: { onFeedback?: (feedback: unknown) => void } | null
+    ): Promise<ActionHandle>;
   }
 
   /**

@@ -26,7 +26,7 @@
 //   - ws:// / wss://       → WebSocket only (call/publish/subscribe/action).
 //   - http:// / https://   → HTTP for call/publish; SSE for action.
 //                            Subscribe lazily uses a sibling WebSocket.
-//   - { http, ws }         → explicit endpoint pair.
+//   - { http, ws }         → HTTP for call/publish; WS for subscribe/action.
 
 let WS = globalThis.WebSocket;
 let _wsResolved = !!WS;
@@ -742,7 +742,8 @@ function _encodeRosName(name) {
  *   - `http://`, `https://`  → HTTP for `call`/`publish`; SSE for `action`.
  *     `subscribe` lazily uses a sibling WebSocket at the same host
  *     with `/capability` appended.
- *   - object `{http, ws}`    → both URLs spelled out explicitly.
+ *   - object `{http, ws}`    → HTTP for `call`/`publish`;
+ *     WebSocket for `subscribe`/`action`.
  *
  * **Path conventions.** When a `ws://` / `wss://` URL is passed
  * without a path (or with just `/`), the SDK appends the runtime's
@@ -936,7 +937,7 @@ export class RosClient {
       );
     }
     if (this._closed) throw new Error('connection closed');
-    if (this._http) {
+    if (this._http && !this._wsEager) {
       return this._http.action(capability, payload, { onFeedback });
     }
     const ws = await this._ensureWs();
